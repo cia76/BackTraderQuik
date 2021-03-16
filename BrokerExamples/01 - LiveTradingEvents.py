@@ -31,7 +31,7 @@ class LiveTradingEvents(bt.Strategy):
     def notify_data(self, data, status, *args, **kwargs):
         """Изменение статуса приходящих баров"""
         dataStatus = data._getstatusname(status)  # Получаем статус (только при LiveBars=True)
-        self.log(dataStatus)
+        print(dataStatus)  # Не можем вывести в лог, т.к. первый статус DELAYED получаем до первого бара (и его даты)
         self.isLive = dataStatus == 'LIVE'
 
     def notify_order(self, order):

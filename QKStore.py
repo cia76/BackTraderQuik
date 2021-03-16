@@ -183,8 +183,8 @@ class QKStore(with_metaclass(MetaSingleton, object)):
                 moneyLimit["currcode"] == CurrencyCode][0]  # валюте
         return float(cash['currentbal'])  # Денежный лимит (остаток) по счету
 
-    def GetValue(self, FirmId, TradeAccountId):
-        """Баланс счета"""
+    def GetPositionsLimits(self, FirmId, TradeAccountId):
+        """Стоимость позиций по счету"""
         if FirmId == 'SPBFUT':  # Для фьючерсов свои расчеты
             try:
                 return float(self.qpProvider.GetFuturesLimit(FirmId, TradeAccountId, 0, 'SUR')['data']['cbplimit'])  # Лимит открытых позиций
@@ -198,7 +198,7 @@ class QKStore(with_metaclass(MetaSingleton, object)):
             lastPrice = float(self.qpProvider.GetParamEx(classCode, secCode, 'LAST')['data']['param_value'])  # Последняя цена сделки
             lastPrice = self.QKToBTPrice(classCode, secCode, lastPrice)  # Для рынка облигаций последнюю цену сделки умножаем на 10
             posValue += pos.size * lastPrice  # Добавляем стоимость позиции
-        return self.getcash() + posValue  # Свободные средства плюс стоимость позиций по счету
+        return posValue  # Стоимость позиций по счету
 
     def PlaceOrder(self, ClientCode, TradeAccountId, owner, data, size, price=None, plimit=None, exectype=None, oco=None, CommInfo=None, IsBuy=True, **kwargs):
         order = BuyOrder(owner=owner, data=data, size=size, price=price, pricelimit=plimit, exectype=exectype, oco=oco) if IsBuy \
@@ -210,7 +210,7 @@ class QKStore(with_metaclass(MetaSingleton, object)):
         if order.exectype == Order.Market:  # Для рыночных заявок
             if classCode == 'SPBFUT':  # Для рынка фьючерсов
                 lastPrice = float(self.qpProvider.GetParamEx(classCode, secCode, 'LAST')['data']['param_value'])  # Последняя цена сделки
-                price = lastPrice * 1.1 if IsBuy else lastPrice * 0.9  # Наихудшая цена (на 10% хуже последней цены). Все равно, войдем по рыночной цене
+                price = lastPrice * 1.001 if IsBuy else lastPrice * 0.999  # Наихудшая цена (на 0.1% хуже последней цены). Все равно, заявка исполнится по рыночной цене
             else:  # Для остальных рынков
                 price = 0  # Цена должна быть нулевой
         else:  # Для остальных заявок

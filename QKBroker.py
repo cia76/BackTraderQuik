@@ -60,10 +60,10 @@ class QKBroker(with_metaclass(MetaQKBroker, BrokerBase)):
     def getvalue(self, datas=None):
         """Баланс счета"""
         if self.store.BrokerCls is not None:  # Если брокер есть в хранилище
-            value = self.store.GetValue(self.p.FirmId, self.p.TradeAccountId)
+            value = self.store.GetPositionsLimits(self.p.FirmId, self.p.TradeAccountId)
             if value is not None:  # Если баланс счета был получен
                 self.value = value  # то запоминаем его
-        return self.value  # Возвращаем последний известный баланс счета
+        return self.getcash() + self.value  # Возвращаем последний известный баланс счета
 
     def getposition(self, data, clone=True):
         """Позиция по тикеру
