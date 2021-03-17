@@ -171,7 +171,7 @@ class QKStore(with_metaclass(MetaSingleton, object)):
         """Свободные средства по счету"""
         if FirmId == 'SPBFUT':  # Для фьючерсов свои расчеты
             try:
-                return float(self.qpProvider.GetFuturesLimit(FirmId, TradeAccountId, 0, 'SUR')['data']['cbplplanned'])  # Чистая позиция
+                return float(self.qpProvider.GetFuturesLimit(FirmId, TradeAccountId, 0, 'SUR')['data']['cbplplanned'])  # Плановые чистые позиции
             except Exception:  # При ошибке Futures limit returns nil
                 return None
         # Для остальных фирм
@@ -187,7 +187,7 @@ class QKStore(with_metaclass(MetaSingleton, object)):
         """Стоимость позиций по счету"""
         if FirmId == 'SPBFUT':  # Для фьючерсов свои расчеты
             try:
-                return float(self.qpProvider.GetFuturesLimit(FirmId, TradeAccountId, 0, 'SUR')['data']['cbplimit'])  # Лимит открытых позиций
+                return float(self.qpProvider.GetFuturesLimit(FirmId, TradeAccountId, 0, 'SUR')['data']['cbplused'])  # Текущие чистые позиции
             except Exception:  # При ошибке Futures limit returns nil
                 return None
 
@@ -230,7 +230,11 @@ class QKStore(with_metaclass(MetaSingleton, object)):
             'QUANTITY': str(size)}  # Кол-во в лотах
         if order.exectype in [Order.Stop, Order.StopLimit]:  # Для стоп заявок
             transaction['ACTION'] = 'NEW_STOP_ORDER'
-            transaction['STOPPRICE'] = str(price)  # Стоп цена исполнения
+            if classCode == 'SPBFUT':  # Для рынка фьючерсов
+                stopPrice = price * 1.001 if IsBuy else price * 0.999  # Наихудшая цена (на 0.1% хуже последней цены)
+            else:  # Для остальных рынков
+                stopPrice = price * 1.01 if IsBuy else price * 0.99  # Наихудшая цена (на 1% хуже последней цены)
+            transaction['STOPPRICE'] = str(stopPrice)  # Стоп цена исполнения
             transaction['EXPIRY_DATE'] = 'GTC'  # Срок действия до отмены
         else:  # Для рыночных или лимитных заявок
             transaction['ACTION'] = 'NEW_ORDER'
