@@ -230,11 +230,8 @@ class QKStore(with_metaclass(MetaSingleton, object)):
             'QUANTITY': str(size)}  # Кол-во в лотах
         if order.exectype in [Order.Stop, Order.StopLimit]:  # Для стоп заявок
             transaction['ACTION'] = 'NEW_STOP_ORDER'
-            if classCode == 'SPBFUT':  # Для рынка фьючерсов
-                stopPrice = price * 1.001 if IsBuy else price * 0.999  # Наихудшая цена (на 0.1% хуже последней цены)
-            else:  # Для остальных рынков
-                stopPrice = price * 1.01 if IsBuy else price * 0.99  # Наихудшая цена (на 1% хуже последней цены)
-            transaction['STOPPRICE'] = str(stopPrice)  # Стоп цена исполнения
+            # TODO Бывают случаи, когда стоп заявка исполняется, выставляется лимитная заявка по стоп цене, а цена идет дальше
+            transaction['STOPPRICE'] = str(price)  # Стоп цена исполнения
             transaction['EXPIRY_DATE'] = 'GTC'  # Срок действия до отмены
         else:  # Для рыночных или лимитных заявок
             transaction['ACTION'] = 'NEW_ORDER'
