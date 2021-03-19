@@ -170,8 +170,16 @@ class QKStore(with_metaclass(MetaSingleton, object)):
     def GetMoneyLimits(self, ClientCode, FirmId, TradeAccountId, LimitKind, CurrencyCode):
         """Свободные средства по счету"""
         if FirmId == 'SPBFUT':  # Для фьючерсов свои расчеты
+            # Видео: https://www.youtube.com/watch?v=u2C7ElpXZ4k
+            # Баланс = Лимит откр.поз. + Вариац.маржа + Накоплен.доход
+            # Лимит откр.поз. - Сумма, которая была на счету вчера в 19:00 МСК (после вечернего клиринга)
+            # Вариац.маржа - Рассчитывается с 19:00 предыдущего дня без учета комисии. Перейдет в Накоплен.доход и обнулится в 14:00 (на дневном клиринге)
+            # Накоплен.доход - Включает Биржевые сборы
+            # Тек.чист.поз. - Заблокированное ГО под открытые позиции
+            # План.чист.поз. - На какую сумму можете открыть еще позиции
             try:
-                return float(self.qpProvider.GetFuturesLimit(FirmId, TradeAccountId, 0, 'SUR')['data']['cbplplanned'])  # Плановые чистые позиции
+                futuresLimit = self.qpProvider.GetFuturesLimit(FirmId, TradeAccountId, 0, 'SUR')['data']
+                return float(futuresLimit['cbplimit']) + float(futuresLimit['varmargin']) + float(futuresLimit['accruedint'])  # Лимит откр.поз. + Вариац.маржа + Накоплен.доход
             except Exception:  # При ошибке Futures limit returns nil
                 return None
         # Для остальных фирм
@@ -187,7 +195,7 @@ class QKStore(with_metaclass(MetaSingleton, object)):
         """Стоимость позиций по счету"""
         if FirmId == 'SPBFUT':  # Для фьючерсов свои расчеты
             try:
-                return float(self.qpProvider.GetFuturesLimit(FirmId, TradeAccountId, 0, 'SUR')['data']['cbplused'])  # Текущие чистые позиции
+                return float(self.qpProvider.GetFuturesLimit(FirmId, TradeAccountId, 0, 'SUR')['data']['cbplused'])  # Тек.чист.поз. (аблокированное ГО под открытые позиции)
             except Exception:  # При ошибке Futures limit returns nil
                 return None
 
