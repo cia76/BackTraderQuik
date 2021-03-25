@@ -242,7 +242,7 @@ class QKStore(with_metaclass(MetaSingleton, object)):
         if order.exectype in [Order.Stop, Order.StopLimit]:  # Для стоп заявок
             transaction['ACTION'] = 'NEW_STOP_ORDER'  # Новая стоп заявка
             transaction['STOPPRICE'] = str(price)  # Стоп цена срабатывания
-            slippage = float(self.GetSecurityInfo(classCode, secCode)['data']['min_price_step']) * self.StopSteps  # Размер проскальзывания в деньгах
+            slippage = float(self.GetSecurityInfo(classCode, secCode)['min_price_step']) * self.StopSteps  # Размер проскальзывания в деньгах
             if slippage.is_integer():  # Целое значение проскальзывания мы должны отправлять без десятичных знаков
                 slippage = int(slippage)  # поэтому, приводим такое проскальзывание к целому числу
             if plimit is not None:  # Если задана лимитная цена исполнения
