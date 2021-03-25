@@ -34,6 +34,7 @@ class QKBroker(with_metaclass(MetaQKBroker, BrokerBase)):
         super(QKBroker, self).__init__()
         self.store = QKStore(**kwargs)  # Хранилище QUIK
         self.notifs = collections.deque()  # Очередь уведомлений о заявках
+        self.lastTradeNums = dict()  # Список номеров последних сделок по тикеру для фильтрации дублей сделок
         self.startingcash = self.cash = 0  # Стартовые и текущие свободные средства по счету
         self.startingvalue = self.value = 0  # Стартовый и текущий баланс счета
 
@@ -45,9 +46,10 @@ class QKBroker(with_metaclass(MetaQKBroker, BrokerBase)):
             self.store.GetPositions(self.p.ClientCode, self.p.FirmId, self.p.LimitKind, self.p.Lots)  # То получаем их
         self.store.qpProvider.OnTransReply = self.OnTransReply  # Ответ на транзакцию пользователя
         self.store.qpProvider.OnOrder = self.OnOrder  # Получение новой / изменение существующей заявки
+        self.store.qpProvider.OnTrade = self.OnTrade  # Получение новой / изменение существующей сделки
         # ---
-        self.store.qpProvider.OnConnected = self.OnConnected
-        self.store.qpProvider.OnDisconnected = self.OnDisconnected
+        self.store.qpProvider.OnConnected = self.OnConnected  # Соединение терминала с сервером QUIK
+        self.store.qpProvider.OnDisconnected = self.OnDisconnected  # Отключение терминала от сервера QUIK
 
     def getcash(self):
         """Свободные средства по счету"""
@@ -80,14 +82,14 @@ class QKBroker(with_metaclass(MetaQKBroker, BrokerBase)):
     def buy(self, owner, data, size, price=None, plimit=None, exectype=None, valid=None, tradeid=0, oco=None, trailamount=None, trailpercent=None, **kwargs):
         """Заявка на покупку"""
         commInfo = self.getcommissioninfo(data)  # По тикеру выставляем комиссии в заявку. Нужно для исполнения заявки в BackTrader
-        order = self.store.PlaceOrder(self.p.ClientCode, self.p.TradeAccountId, owner, data, size, price, plimit, exectype, oco, commInfo, True, **kwargs)
+        order = self.store.PlaceOrder(self.p.ClientCode, self.p.TradeAccountId, owner, data, size, price, plimit, exectype, valid, oco, commInfo, True, **kwargs)
         self.notifs.append(order.clone())  # Удедомляем брокера об отправке новой заявки на рынок
         return order
 
     def sell(self, owner, data, size, price=None, plimit=None, exectype=None, valid=None, tradeid=0, oco=None, trailamount=None, trailpercent=None, **kwargs):
         """Заявка на продажу"""
         commInfo = self.getcommissioninfo(data)  # По тикеру выставляем комиссии в заявку. Нужно для исполнения заявки в BackTrader
-        order = self.store.PlaceOrder(self.p.ClientCode, self.p.TradeAccountId, owner, data, size, price, plimit, exectype, oco, commInfo, False, **kwargs)
+        order = self.store.PlaceOrder(self.p.ClientCode, self.p.TradeAccountId, owner, data, size, price, plimit, exectype, valid, oco, commInfo, False, **kwargs)
         self.notifs.append(order.clone())  # Удедомляем брокера об отправке новой заявки на рынок
         return order
 
@@ -108,6 +110,7 @@ class QKBroker(with_metaclass(MetaQKBroker, BrokerBase)):
         super(QKBroker, self).stop()
         self.store.qpProvider.OnTransReply = self.store.qpProvider.DefaultHandler()  # Ответ на транзакцию пользователя
         self.store.qpProvider.OnOrder = self.store.qpProvider.DefaultHandler()  # Получение новой / изменение существующей заявки
+        self.store.qpProvider.OnTrade = self.store.qpProvider.DefaultHandler()  # Получение новой / изменение существующей сделки
         self.store.BrokerCls = None  # Удаляем класс брокера из хранилища
 
     def OnTransReply(self, data):
@@ -184,7 +187,6 @@ class QKBroker(with_metaclass(MetaQKBroker, BrokerBase)):
         if order.status == order.Completed:  # Если заявка уже была исполнена
             return  # то выходим, дальше не продолжаем
 
-        remSize = order.executed.remsize  # Кол-во в штуках к исполнению до исполнения заявки
         try:  # TODO Очень редко возникает ошибка:
             # linebuffer.py, line 163, in __getitem__
             # return self.array[self.idx + ago]
@@ -192,28 +194,48 @@ class QKBroker(with_metaclass(MetaQKBroker, BrokerBase)):
             dt = order.data.datetime[0]  # Дата и время исполнения заявки. Последняя известная
         except IndexError:  # При ошибке IndexError: array index out of range
             dt = datetime.now(QKStore.MarketTimeZone)  # Берем текущее время на рынке
-        size = remSize - balanceSize  # Исполнено в штуках
+        size = order.executed.remsize - balanceSize  # Исполнено в штуках = Кол-во в штуках к исполнению до исполнения заявки - Кол-во в штуках к исполнению после исполнения заявки
         price = self.store.QKToBTPrice(classCode, secCode, int(qkOrder['price']))  # Цена
-        pos = self.getposition(order.data, clone=False)  # Получаем позицию
+        pos = self.getposition(order.data, clone=False)  # Получаем позицию по тикеру
         if pos is None:  # Если позиция не существует
             self.store.positions[data._dataname] = Position(0, 0)  # то добавляем позицию в список
             pos = self.store.positions[data._dataname]  # Получаем позицию по тикеру
-        psize, pprice, opened, closed = pos.update(size, price)  # Обновляем ее и получаем данные для исполнения заявки в BackTrader
-        closedvalue = closedcomm = 0.0
-        openedvalue = openedcomm = 0.0
-        margin = pnl = 0.0
-        order.execute(dt, size, price, closed, closedvalue, closedcomm, opened, openedvalue, openedcomm, margin, pnl, psize, pprice,)  # Исполняем заявку в BackTrader
+        # TODO Полностью прописать данные по суммам/комиссиям сделок, размеру маржи, балансу
+        order.execute(dt, size, price, pos.upclosed, 0, 0, pos.upopened, 0, 0, 0, 0, pos.size, pos.price,)  # Исполняем заявку в BackTrader
         if order.executed.remsize:  # Заявка исполнена частично (осталось что-то к исполнению)
             order.partial()  # Переводим заявку в статус Order.Partial
             self.notifs.append(order.clone())  # Добавляем в список уведомлений копию заявки  # Уведомляем брокера о частичном исполнении заявки
-        else: # Заявка исполнена полностью (ничего нет к исполнению)
+        else:  # Заявка исполнена полностью (ничего нет к исполнению)
             order.completed()  # Переводим заявку в статус Order.Completed
             self.notifs.append(order.clone())  # Уведомляем брокера о полном исполнении заявки
             self.store.OCOCheck(order)  # Проверяем связанные заявки
 
+    def OnTrade(self, data):
+        """Обработчик события получения новой / изменения существующей сделки. Выполняется до события изменения существующей заявки"""
+        qkTrade = data['data']  # Сделка в QUIK
+        classCode = qkTrade['class_code']  # Код площадки
+        secCode = qkTrade['sec_code']  # Код тикера
+        size = int(qkTrade['qty'])  # Абсолютное кол-во
+        if self.p.Lots:  # Если входящий остаток в лотах
+            size = self.store.LotsToSize(classCode, secCode, size)  # то переводим кол-во из лотов в штуки
+        if qkTrade['flags'] & 0b100 == 0b100:  # Если сделка на продажу (бит 2)
+            size *= -1  # то кол-во ставим отрицательным
+        price = float(qkTrade['price'])  # Цена исполнения
+        price = self.store.QKToBTPrice(classCode, secCode, price)  # Переводим цену исполнения за лот в цену исполнения за штуку
+        dataname = self.store.ClassSecCodeToDataName(classCode, secCode)  # Получаем название тикера по коду площадки и коду тикера
+        tradeNum = int(qkTrade['trade_num'])  # Номер сделки (дублируется 3 раза)
+        if dataname not in self.lastTradeNums.keys():  # Если это первая сделка (номера последней сделки нет)
+            self.lastTradeNums[dataname] = 0  # то заносим 0 в список номеров последних сделок по тикеру (чтобы отличался от номера последней сделки)
+        if tradeNum != self.lastTradeNums[dataname]:  # Если номер последней сделки отличается (фильтр для дублей)
+            if self.store.positions[dataname] is not None:  # Если позиция уже существует
+                self.store.positions[dataname].update(size, price)  # то обновляем размер/цену позиции на размер/цену сделки
+            else:  # Если позиция не существует
+                self.store.positions[dataname] = Position(size, price)  # то добавляем позицию в список
+            self.lastTradeNums[dataname] = tradeNum  # Запоминаем номер последней сделки по тикеру в списке
+
     def OnConnected(self, data):
         dt = datetime.now(QKStore.MarketTimeZone)  # Берем текущее время на рынке
-        print(f'{dt.strftime("%d.%m.%Y %H:%M")} - QUIK Connected')
+        print(f'{dt.strftime("%d.%m.%Y %H:%M")}, QUIK Connected')
         self.store.isConnected = True  # QUIK подключен к серверу брокера
 
     def OnDisconnected(self, data):
@@ -221,5 +243,5 @@ class QKBroker(with_metaclass(MetaQKBroker, BrokerBase)):
             return  # то не нужно дублировать сообщение, выходим, дальше не продолжаем
 
         dt = datetime.now(QKStore.MarketTimeZone)  # Берем текущее время на рынке
-        print(f'{dt.strftime("%d.%m.%Y %H:%M")} - QUIK Disconnected')
+        print(f'{dt.strftime("%d.%m.%Y %H:%M")}, QUIK Disconnected')
         self.store.isConnected = False  # QUIK отключен от сервера брокера

@@ -1,4 +1,5 @@
 import collections
+import datetime
 from pytz import timezone
 
 from backtrader.metabase import MetaParams
@@ -19,7 +20,7 @@ class MetaSingleton(MetaParams):
     def __call__(cls, *args, **kwargs):
         """Вызов класса"""
         if cls._singleton is None:  # Если класса нет в экземплярах класса
-            cls._singleton  = super(MetaSingleton, cls).__call__(*args, **kwargs)  # то создаем зкземпляр класса
+            cls._singleton = super(MetaSingleton, cls).__call__(*args, **kwargs)  # то создаем зкземпляр класса
         return cls._singleton  # Возвращаем экземпляр класса
 
 
@@ -34,6 +35,7 @@ class QKStore(with_metaclass(MetaSingleton, object)):
     DataCls = None  # Класс данных будет задан из данных
 
     MarketTimeZone = timezone('Europe/Moscow')  # Биржа работает по московскому времени
+    StopSteps = 10  # Размер в минимальных шагах цены инструмента для исполнения стоп заявок
 
     @classmethod
     def getdata(cls, *args, **kwargs):
@@ -208,7 +210,8 @@ class QKStore(with_metaclass(MetaSingleton, object)):
             posValue += pos.size * lastPrice  # Добавляем стоимость позиции
         return posValue  # Стоимость позиций по счету
 
-    def PlaceOrder(self, ClientCode, TradeAccountId, owner, data, size, price=None, plimit=None, exectype=None, oco=None, CommInfo=None, IsBuy=True, **kwargs):
+    def PlaceOrder(self, ClientCode, TradeAccountId, owner, data, size, price=None, plimit=None, exectype=None, valid=None, oco=None, CommInfo=None, IsBuy=True, **kwargs):
+        # TODO: Организовать работу группы заявок с 'parent' и 'transmit'
         order = BuyOrder(owner=owner, data=data, size=size, price=price, pricelimit=plimit, exectype=exectype, oco=oco) if IsBuy \
             else SellOrder(owner=owner, data=data, size=size, price=price, pricelimit=plimit, exectype=exectype, oco=oco)  # Заявка на покупку/продажу
         order.addinfo(**kwargs)  # Передаем все дополнительные параметры
@@ -220,13 +223,13 @@ class QKStore(with_metaclass(MetaSingleton, object)):
                 lastPrice = float(self.qpProvider.GetParamEx(classCode, secCode, 'LAST')['data']['param_value'])  # Последняя цена сделки
                 price = lastPrice * 1.001 if IsBuy else lastPrice * 0.999  # Наихудшая цена (на 0.1% хуже последней цены). Все равно, заявка исполнится по рыночной цене
             else:  # Для остальных рынков
-                price = 0  # Цена должна быть нулевой
+                price = 0  # Цена рыночной заявки должна быть нулевой
         else:  # Для остальных заявок
             price = self.BTToQKPrice(classCode, secCode, price)  # Переводим цену из BackTrader в QUIK
         scale = int(self.GetSecurityInfo(classCode, secCode)['scale'])  # Кол-во значащих цифр после запятой
         price = round(price, scale)  # Округляем цену до кол-ва значащих цифр
-        if price.is_integer():
-            price = int(price)
+        if price.is_integer():  # Целое значение цены мы должны отправлять без десятичных знаков
+            price = int(price)  # поэтому, приводим такую цену к целому числу
         transaction = {  # Все значения должны передаваться в виде строк
             'TRANS_ID': str(self.newTransId),  # Номер транзакции задается клиентом
             'CLIENT_CODE': ClientCode,  # Код клиента. Для фьючерсов его нет
@@ -237,12 +240,26 @@ class QKStore(with_metaclass(MetaSingleton, object)):
             'PRICE': str(price),  # Цена исполнения
             'QUANTITY': str(size)}  # Кол-во в лотах
         if order.exectype in [Order.Stop, Order.StopLimit]:  # Для стоп заявок
-            transaction['ACTION'] = 'NEW_STOP_ORDER'
-            # TODO Бывают случаи, когда стоп заявка исполняется, выставляется лимитная заявка по стоп цене, а цена идет дальше
-            transaction['STOPPRICE'] = str(price)  # Стоп цена исполнения
-            transaction['EXPIRY_DATE'] = 'GTC'  # Срок действия до отмены
+            transaction['ACTION'] = 'NEW_STOP_ORDER'  # Новая стоп заявка
+            transaction['STOPPRICE'] = str(price)  # Стоп цена срабатывания
+            slippage = float(self.GetSecurityInfo(classCode, secCode)['data']['min_price_step']) * self.StopSteps  # Размер проскальзывания в деньгах
+            if slippage.is_integer():  # Целое значение проскальзывания мы должны отправлять без десятичных знаков
+                slippage = int(slippage)  # поэтому, приводим такое проскальзывание к целому числу
+            if plimit is not None:  # Если задана лимитная цена исполнения
+                limitPrice = plimit  # то ее и берем
+            elif IsBuy:  # Если цена не задана, и покупаем
+                limitPrice = price + slippage  # то будем покупать по большей цене в размер проскальзывания
+            else:  # Если цена не задана, и продаем
+                limitPrice = price - slippage  # то будем продавать по меньшей цене в размер проскальзывания
+            transaction['PRICE'] = str(limitPrice)  # Лимитная цена исполнения
+            expiryDate = 'GTC'  # По умолчанию будем держать заявку до отмены GTC = Good Till Cancelled
+            if valid in [Order.DAY, 0]:  # Если заявка поставлена на день
+                expiryDate = 'TODAY'  # то будем держать ее до окончания текущей торговой сессии
+            elif isinstance(valid, datetime.date):  # Если заявка поставлена до даты
+                expiryDate = valid.strftime('%Y%m%d')  # то будем держать ее до указанной даты
+            transaction['EXPIRY_DATE'] = expiryDate  # Срок действия стоп заявки
         else:  # Для рыночных или лимитных заявок
-            transaction['ACTION'] = 'NEW_ORDER'
+            transaction['ACTION'] = 'NEW_ORDER'  # Новая рыночная или лимитная заявка
             transaction['TYPE'] = 'L' if order.exectype == Order.Limit else 'M'  # L = лимитная заявка (по умолчанию), M = рыночная заявка
         order.ref = self.newTransId  # Ставим номер транзакции в заявку
         self.newTransId += 1  # Увеличиваем номер транзакции для будущих заявок
