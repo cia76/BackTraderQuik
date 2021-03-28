@@ -167,7 +167,7 @@ class QKStore(with_metaclass(MetaSingleton, object)):
                 price = float(firmKindDepoLimit['wa_position_price'])  # Цена приобретения
                 price = self.QKToBTPrice(classCode, secCode, price)  # Для рынка облигаций цену приобретения умножаем на 10
                 dataname = self.ClassSecCodeToDataName(classCode, secCode)  # Получаем название тикера по коду площадки и коду тикера
-                self.positions[dataname] = Position(size, price)  # Добавляем позицию в список
+                self.positions[dataname] = Position(size, price)  # Сохраняем в списке открытых позиций
 
     def GetMoneyLimits(self, ClientCode, FirmId, TradeAccountId, LimitKind, CurrencyCode):
         """Свободные средства по счету"""
@@ -304,3 +304,15 @@ class QKStore(with_metaclass(MetaSingleton, object)):
         if order.ref in self.ocos.keys():  # Если у этой заявки есть родительская заявка
             ocoRef = self.ocos[order.ref]  # то получаем номер родительской заявки
             self.CancelOrder(self.orders[ocoRef])  # и удаляем родительскую заявку
+
+    def OnConnected(self, data):
+        dt = datetime.now(QKStore.MarketTimeZone)  # Берем текущее время на рынке
+        print(f'{dt.strftime("%d.%m.%Y %H:%M")}, QUIK Connected')
+        self.store.isConnected = True  # QUIK подключен к серверу брокера
+
+    def OnDisconnected(self, data):
+        if not self.store.isConnected:  # Если QUIK отключен от сервера брокера
+            return  # то не нужно дублировать сообщение, выходим, дальше не продолжаем
+        dt = datetime.now(QKStore.MarketTimeZone)  # Берем текущее время на рынке
+        print(f'{dt.strftime("%d.%m.%Y %H:%M")}, QUIK Disconnected')
+        self.store.isConnected = False  # QUIK отключен от сервера брокера
