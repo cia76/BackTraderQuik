@@ -278,20 +278,22 @@ class QKStore(with_metaclass(MetaSingleton, object)):
         if not self.orders.get(order.ref, False):  # Если заявка не найдена
             return  # то выходим, дальше не продолжаем
 
-        if not order.ref in self.orderNums:  # Если заявки нет в словаре заявок на бирже
+        if order.ref not in self.orderNums:  # Если заявки нет в словаре заявок на бирже
             return  # то выходим, дальше не продолжаем
 
-        orderNum = self.orderNums[order.ref]  # Номер (стоп)заявки на бирже
+        orderNum = self.orderNums[order.ref]  # Номер заявки на бирже
         classCode, secCode = self.DataNameToClassSecCode(order.data._dataname)  # По названию тикера получаем код площадки и код тикера
-        isStop = order.exectype in [Order.Stop, Order.StopLimit]  # Признак стоп заявки
+        isStop = order.exectype in [Order.Stop, Order.StopLimit] and \
+                 isinstance(self.qpProvider.GetOrderByNumber(orderNum)['data'], int)  # Задана стоп заявка и лимитная заявка не выставлена
         transaction = {
             'TRANS_ID': str(order.ref),  # Номер транзакции задается клиентом
-            'ACTION': 'KILL_STOP_ORDER' if isStop else 'KILL_ORDER',  # Тип для стоп и лимитных заявок
             'CLASSCODE': classCode,  # Код площадки
-            'SECCODE': secCode }  # Код тикера
+            'SECCODE': secCode}  # Код тикера
         if isStop:  # Для стоп заявки
+            transaction['ACTION'] = 'KILL_STOP_ORDER'  # Будем удалять стоп заявку
             transaction['STOP_ORDER_KEY'] = str(orderNum)  # Номер стоп заявки на бирже
         else:  # Для лимитной заявки
+            transaction['ACTION'] = 'KILL_ORDER'  # Будем удалять лимитную заявку
             transaction['ORDER_KEY'] = str(orderNum)  # Номер заявки на бирже
         self.qpProvider.SendTransaction(transaction)  # Отправляем транзакцию на рынок
         return order  # В список уведомлений ничего не добавляем. Ждем события OnTransReply
@@ -308,11 +310,11 @@ class QKStore(with_metaclass(MetaSingleton, object)):
     def OnConnected(self, data):
         dt = datetime.now(QKStore.MarketTimeZone)  # Берем текущее время на рынке
         print(f'{dt.strftime("%d.%m.%Y %H:%M")}, QUIK Connected')
-        self.store.isConnected = True  # QUIK подключен к серверу брокера
+        self.isConnected = True  # QUIK подключен к серверу брокера
 
     def OnDisconnected(self, data):
-        if not self.store.isConnected:  # Если QUIK отключен от сервера брокера
+        if not self.isConnected:  # Если QUIK отключен от сервера брокера
             return  # то не нужно дублировать сообщение, выходим, дальше не продолжаем
         dt = datetime.now(QKStore.MarketTimeZone)  # Берем текущее время на рынке
         print(f'{dt.strftime("%d.%m.%Y %H:%M")}, QUIK Disconnected')
-        self.store.isConnected = False  # QUIK отключен от сервера брокера
+        self.isConnected = False  # QUIK отключен от сервера брокера
