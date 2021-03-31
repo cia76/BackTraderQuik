@@ -109,7 +109,7 @@ class QKData(with_metaclass(MetaQKData, AbstractDataBase)):
         self.lines.open[0] = self.store.QKToBTPrice(self.classCode, self.secCode, self.jsonBar['open'])
         self.lines.high[0] = self.store.QKToBTPrice(self.classCode, self.secCode, self.jsonBar['high'])
         self.lines.low[0] = self.store.QKToBTPrice(self.classCode, self.secCode, self.jsonBar['low'])
-        self.lines.close[0] =self.store.QKToBTPrice(self.classCode, self.secCode,  self.jsonBar['close'])
+        self.lines.close[0] = self.store.QKToBTPrice(self.classCode, self.secCode,  self.jsonBar['close'])
         self.lines.volume[0] = self.jsonBar['volume']
         self.lines.openinterest[0] = 0  # Открытый интерес в QUIK не учитывается
 

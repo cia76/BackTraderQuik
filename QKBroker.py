@@ -5,7 +5,6 @@ import time
 from backtrader import BrokerBase
 from backtrader.utils.py3 import with_metaclass
 from backtrader import Order
-from backtrader.position import Position
 
 from BackTraderQuik import QKStore
 
@@ -136,7 +135,7 @@ class QKBroker(with_metaclass(MetaQKBroker, BrokerBase)):
                 # return self.array[self.idx + ago]
                 # IndexError: array index out of range
                 order.cancel()  # Переводим заявку в статус Order.Canceled (отмена существующей заявки)
-            except IndexError:  # При ошибке IndexError: array index out of range
+            except (KeyError, IndexError):  # При ошибке
                 order.status = Order.Canceled  # все равно ставим статус заявки Order.Canceled
             self.notifs.append(order.clone())  # Уведомляем брокера об отмене существующей заявки
             self.store.OCOCheck(order)  # Проверяем связанные заявки
@@ -152,7 +151,7 @@ class QKBroker(with_metaclass(MetaQKBroker, BrokerBase)):
                 # return self.array[self.idx + ago]
                 # IndexError: array index out of range
                 order.reject()  # Переводим заявку в статус Order.Reject
-            except IndexError:  # При ошибке IndexError: array index out of range
+            except (KeyError, IndexError):  # При ошибке
                 order.status = Order.Rejected  # все равно ставим статус заявки Order.Rejected
             self.notifs.append(order.clone())  # Уведомляем брокера об ошибке заявки
             self.store.OCOCheck(order)  # Проверяем связанные заявки
@@ -196,7 +195,7 @@ class QKBroker(with_metaclass(MetaQKBroker, BrokerBase)):
             # return self.array[self.idx + ago]
             # IndexError: array index out of range
             dt = order.data.datetime[0]  # Дата и время исполнения заявки. Последняя известная
-        except IndexError:  # При ошибке IndexError: array index out of range
+        except (KeyError, IndexError):  # При ошибке
             dt = datetime.now(QKStore.MarketTimeZone)  # Берем текущее время на рынке
         pos = self.getposition(order.data, clone=False)  # Получаем позицию по тикеру или нулевую позицию если тикера в списке позиций нет
         psize, pprice, opened, closed = pos.update(size, price)  # Обновляем размер/цену позиции на размер/цену сделки
@@ -208,4 +207,4 @@ class QKBroker(with_metaclass(MetaQKBroker, BrokerBase)):
         else:  # Если заявка исполнена полностью (ничего нет к исполнению)
             order.completed()  # Переводим заявку в статус Order.Completed
             self.notifs.append(order.clone())  # Уведомляем брокера о полном исполнении заявки
-            self.store.OCOCheck(order)  # Проверяем связанные заявки
+        self.store.OCOCheck(order)  # Проверяем связанные заявки. Снимаем oco-заявку даже при первом частичном исполнении заявки

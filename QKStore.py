@@ -1,5 +1,5 @@
 import collections
-import datetime
+from datetime import datetime, date
 from pytz import timezone
 
 from backtrader.metabase import MetaParams
@@ -255,7 +255,7 @@ class QKStore(with_metaclass(MetaSingleton, object)):
             expiryDate = 'GTC'  # По умолчанию будем держать заявку до отмены GTC = Good Till Cancelled
             if valid in [Order.DAY, 0]:  # Если заявка поставлена на день
                 expiryDate = 'TODAY'  # то будем держать ее до окончания текущей торговой сессии
-            elif isinstance(valid, datetime.date):  # Если заявка поставлена до даты
+            elif isinstance(valid, date):  # Если заявка поставлена до даты
                 expiryDate = valid.strftime('%Y%m%d')  # то будем держать ее до указанной даты
             transaction['EXPIRY_DATE'] = expiryDate  # Срок действия стоп заявки
         else:  # Для рыночных или лимитных заявок
