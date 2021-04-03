@@ -184,10 +184,13 @@ class QKBroker(with_metaclass(MetaQKBroker, BrokerBase)):
 
         orderNum = int(qkTrade['order_num'])  # Номер заявки на бирже
         jsonOrder = self.store.qpProvider.GetOrderByNumber(orderNum)['data']  # По номеру заявки в сделке пробуем получить заявку с биржи
-        if isinstance(jsonOrder, int):  # Если заявка не найдена (не успела прийти к брокеру), то в ответ получаем целое число номера заявки
+        if isinstance(jsonOrder, int):  # Если заявка не найдена, то в ответ получаем целое число номера заявки.  Возможно, она не успела прийти к брокеру
             time.sleep(3)  # Ждем 3 секунды, пока заявка не придет к брокеру
             jsonOrder = self.store.qpProvider.GetOrderByNumber(orderNum)['data']  # Получаем заявку с биржи по ее номеру
+            if isinstance(jsonOrder, int):  # Если заявка так и не была найдена
+                return  # то выходим, дальше не продолжаем
         transId = int(jsonOrder['trans_id'])  # Получаем номер транзакции из заявки с биржи
+
         self.store.orderNums[transId] = orderNum  # Сохраняем номер заявки на бирже (может быть переход от стоп заявки к лимитной с изменением номера на бирже)
         order: Order = self.store.orders[transId]  # Ищем заявку по номеру транзакции
         try:  # TODO Очень редко возникает ошибка:
@@ -207,4 +210,6 @@ class QKBroker(with_metaclass(MetaQKBroker, BrokerBase)):
         else:  # Если заявка исполнена полностью (ничего нет к исполнению)
             order.completed()  # Переводим заявку в статус Order.Completed
             self.notifs.append(order.clone())  # Уведомляем брокера о полном исполнении заявки
-        self.store.OCOCheck(order)  # Проверяем связанные заявки. Снимаем oco-заявку даже при первом частичном исполнении заявки
+            # Снимаем oco-заявку только после полного исполнения заявки
+            # Если нужно снять oco-заявку на частичном исполнении, то прописываем это правило в ТС
+            self.store.OCOCheck(order)  # Проверяем связанные заявки
