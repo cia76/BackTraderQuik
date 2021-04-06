@@ -165,6 +165,21 @@ class QKBroker(with_metaclass(MetaQKBroker, BrokerBase)):
         Выполняется до события изменения существующей заявки. Нужен для определения цены исполнения заявок.
         """
         qkTrade = data['data']  # Сделка в QUIK
+        orderNum = int(qkTrade['order_num'])  # Номер заявки на бирже
+        jsonOrder = self.store.qpProvider.GetOrderByNumber(orderNum)['data']  # По номеру заявки в сделке пробуем получить заявку с биржи
+        if isinstance(jsonOrder, int):  # Если заявка не найдена, то в ответ получаем целое число номера заявки. Возможно заявка есть, но она не успела прийти к брокеру
+            print(f'Заявка с номером {orderNum} найдена на бирже с 1-ой попытки. Через 3 с будет 2-ая попытка')
+            time.sleep(3)  # Ждем 3 секунды, пока заявка не придет к брокеру
+            jsonOrder = self.store.qpProvider.GetOrderByNumber(orderNum)['data']  # Снова пробуем получить заявку с биржи по ее номеру
+            if isinstance(jsonOrder, int):  # Если заявка так и не была найдена
+                print(f'Заявка с номером {orderNum} не найдена на бирже со 2-ой попытки')
+                return  # то выходим, дальше не продолжаем
+
+        transId = int(jsonOrder['trans_id'])  # Получаем номер транзакции из заявки с биржи
+        if transId == 0:  # Заявки, выставленные не из автоторговли / только что (с нулевыми номерами транзакции)
+            return  # не обрабатываем, пропускаем
+        self.store.orderNums[transId] = orderNum  # Сохраняем номер заявки на бирже (может быть переход от стоп заявки к лимитной с изменением номера на бирже)
+
         classCode = qkTrade['class_code']  # Код площадки
         secCode = qkTrade['sec_code']  # Код тикера
         dataname = self.store.ClassSecCodeToDataName(classCode, secCode)  # Получаем название тикера по коду площадки и коду тикера
@@ -182,16 +197,6 @@ class QKBroker(with_metaclass(MetaQKBroker, BrokerBase)):
             size *= -1  # то кол-во ставим отрицательным
         price = self.store.QKToBTPrice(classCode, secCode, float(qkTrade['price']))  # Переводим цену исполнения за лот в цену исполнения за штуку
 
-        orderNum = int(qkTrade['order_num'])  # Номер заявки на бирже
-        jsonOrder = self.store.qpProvider.GetOrderByNumber(orderNum)['data']  # По номеру заявки в сделке пробуем получить заявку с биржи
-        if isinstance(jsonOrder, int):  # Если заявка не найдена, то в ответ получаем целое число номера заявки.  Возможно, она не успела прийти к брокеру
-            time.sleep(3)  # Ждем 3 секунды, пока заявка не придет к брокеру
-            jsonOrder = self.store.qpProvider.GetOrderByNumber(orderNum)['data']  # Получаем заявку с биржи по ее номеру
-            if isinstance(jsonOrder, int):  # Если заявка так и не была найдена
-                return  # то выходим, дальше не продолжаем
-        transId = int(jsonOrder['trans_id'])  # Получаем номер транзакции из заявки с биржи
-
-        self.store.orderNums[transId] = orderNum  # Сохраняем номер заявки на бирже (может быть переход от стоп заявки к лимитной с изменением номера на бирже)
         order: Order = self.store.orders[transId]  # Ищем заявку по номеру транзакции
         try:  # TODO Очень редко возникает ошибка:
             # linebuffer.py, line 163, in __getitem__
