@@ -138,7 +138,7 @@ class QKStore(with_metaclass(MetaSingleton, object)):
 
     def GetPositions(self, ClientCode, FirmId, LimitKind, Lots):
         """Все активные позиции по счету"""
-        if FirmId == 'SPBFUT':  # Для фьючерсов свои расчеты
+        if 'SPBFUT' in FirmId:  # Для фьючерсов свои расчеты
             futuresHoldings = self.qpProvider.GetFuturesHoldings()['data']  # Все фьючерсные позиции
             activeFuturesHoldings = [futuresHolding for futuresHolding in futuresHoldings if futuresHolding['totalnet'] != 0]  # Активные фьючерсные позиции
             for activeFuturesHolding in activeFuturesHoldings:  # Пробегаемся по всем активным фьючерсным позициям
@@ -171,7 +171,7 @@ class QKStore(with_metaclass(MetaSingleton, object)):
 
     def GetMoneyLimits(self, ClientCode, FirmId, TradeAccountId, LimitKind, CurrencyCode):
         """Свободные средства по счету"""
-        if FirmId == 'SPBFUT':  # Для фьючерсов свои расчеты
+        if 'SPBFUT' in FirmId:  # Для фьючерсов свои расчеты
             # Видео: https://www.youtube.com/watch?v=u2C7ElpXZ4k
             # Баланс = Лимит откр.поз. + Вариац.маржа + Накоплен.доход
             # Лимит откр.поз. - Сумма, которая была на счету вчера в 19:00 МСК (после вечернего клиринга)
@@ -195,7 +195,7 @@ class QKStore(with_metaclass(MetaSingleton, object)):
 
     def GetPositionsLimits(self, FirmId, TradeAccountId):
         """Стоимость позиций по счету"""
-        if FirmId == 'SPBFUT':  # Для фьючерсов свои расчеты
+        if 'SPBFUT' in FirmId:  # Для фьючерсов свои расчеты
             try:
                 return float(self.qpProvider.GetFuturesLimit(FirmId, TradeAccountId, 0, 'SUR')['data']['cbplused'])  # Тек.чист.поз. (аблокированное ГО под открытые позиции)
             except Exception:  # При ошибке Futures limit returns nil
