@@ -141,7 +141,7 @@ class QKBroker(with_metaclass(MetaQKBroker, BrokerBase)):
             self.store.OCOCheck(order)  # Проверяем связанные заявки
         elif status in (2, 4, 5, 10, 11, 12, 13, 14, 16):  # Транзакция не выполнена (ошибка заявки)
             if status == 4 and 'Не найдена заявка' in resultMsg or \
-                status == 5 and 'не можете снять' in resultMsg:   # Не найдена заявка для удаления / Вы не можете снять данную заявку
+               status == 5 and 'не можете снять' in resultMsg:   # Не найдена заявка для удаления / Вы не можете снять данную заявку
                 return  # то заявку не отменяем, выходим, дальше не продолжаем
 
             try:  # TODO Очень редко возникает ошибка:

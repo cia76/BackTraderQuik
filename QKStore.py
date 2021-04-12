@@ -228,7 +228,7 @@ class QKStore(with_metaclass(MetaSingleton, object)):
             price = self.BTToQKPrice(classCode, secCode, price)  # Переводим цену из BackTrader в QUIK
         scale = int(self.GetSecurityInfo(classCode, secCode)['scale'])  # Кол-во значащих цифр после запятой
         price = round(price, scale)  # Округляем цену до кол-ва значащих цифр
-        if price.is_integer():  # Целое значение цены мы должны отправлять без десятичных знаков
+        if isinstance(price, int):  # Целое значение цены мы должны отправлять без десятичных знаков
             price = int(price)  # поэтому, приводим такую цену к целому числу
         transaction = {  # Все значения должны передаваться в виде строк
             'TRANS_ID': str(self.newTransId),  # Номер транзакции задается клиентом
@@ -243,7 +243,7 @@ class QKStore(with_metaclass(MetaSingleton, object)):
             transaction['ACTION'] = 'NEW_STOP_ORDER'  # Новая стоп заявка
             transaction['STOPPRICE'] = str(price)  # Стоп цена срабатывания
             slippage = float(self.GetSecurityInfo(classCode, secCode)['min_price_step']) * self.StopSteps  # Размер проскальзывания в деньгах
-            if slippage.is_integer():  # Целое значение проскальзывания мы должны отправлять без десятичных знаков
+            if isinstance(slippage, int):  # Целое значение проскальзывания мы должны отправлять без десятичных знаков
                 slippage = int(slippage)  # поэтому, приводим такое проскальзывание к целому числу
             if plimit is not None:  # Если задана лимитная цена исполнения
                 limitPrice = plimit  # то ее и берем
@@ -284,7 +284,7 @@ class QKStore(with_metaclass(MetaSingleton, object)):
         orderNum = self.orderNums[order.ref]  # Номер заявки на бирже
         classCode, secCode = self.DataNameToClassSecCode(order.data._dataname)  # По названию тикера получаем код площадки и код тикера
         isStop = order.exectype in [Order.Stop, Order.StopLimit] and \
-                 isinstance(self.qpProvider.GetOrderByNumber(orderNum)['data'], int)  # Задана стоп заявка и лимитная заявка не выставлена
+            isinstance(self.qpProvider.GetOrderByNumber(orderNum)['data'], int)  # Задана стоп заявка и лимитная заявка не выставлена
         transaction = {
             'TRANS_ID': str(order.ref),  # Номер транзакции задается клиентом
             'CLASSCODE': classCode,  # Код площадки
