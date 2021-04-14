@@ -168,7 +168,7 @@ class QKBroker(with_metaclass(MetaQKBroker, BrokerBase)):
         orderNum = int(qkTrade['order_num'])  # Номер заявки на бирже
         jsonOrder = self.store.qpProvider.GetOrderByNumber(orderNum)['data']  # По номеру заявки в сделке пробуем получить заявку с биржи
         if isinstance(jsonOrder, int):  # Если заявка не найдена, то в ответ получаем целое число номера заявки. Возможно заявка есть, но она не успела прийти к брокеру
-            print(f'Заявка с номером {orderNum} найдена на бирже с 1-ой попытки. Через 3 с будет 2-ая попытка')
+            print(f'Заявка с номером {orderNum} не найдена на бирже с 1-ой попытки. Через 3 с будет 2-ая попытка')
             time.sleep(3)  # Ждем 3 секунды, пока заявка не придет к брокеру
             jsonOrder = self.store.qpProvider.GetOrderByNumber(orderNum)['data']  # Снова пробуем получить заявку с биржи по ее номеру
             if isinstance(jsonOrder, int):  # Если заявка так и не была найдена
