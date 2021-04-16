@@ -119,8 +119,14 @@ class QKBroker(with_metaclass(MetaQKBroker, BrokerBase)):
         if transId == 0:  # Заявки, выставленные не из автоторговли / только что (с нулевыми номерами транзакции)
             return  # не обрабатываем, пропускаем
 
-        self.store.orderNums[transId] = int(qkTransReply['order_num'])  # Сохраняем номер заявки на бирже
-        order: Order = self.store.orders[transId]  # Ищем заявку по номеру транзакции
+        orderNum = int(qkTransReply['order_num'])  # Номер заявки на бирже
+        try:  # Могут приходить другие заявки, не выставленные в автоторговле
+            order: Order = self.store.orders[transId]  # Ищем заявку по номеру транзакции
+        except KeyError:  # При ошибке
+            print(f'Заявка {orderNum} на бирже с номером транзакции {transId} не найдена')
+            return  # не обрабатываем, пропускаем
+
+        self.store.orderNums[transId] = orderNum  # Сохраняем номер заявки на бирже
         # TODO Есть поле flags, но оно не документировано. Лучше вместо текстового результата транзакции разбирать по нему
         resultMsg = qkTransReply['result_msg']  # По результату исполнения транзакции (очень плохое решение)
         status = int(qkTransReply['status'])  # Статус транзакции
