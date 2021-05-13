@@ -174,24 +174,32 @@ class QKStore(with_metaclass(MetaSingleton, object)):
         if 'SPBFUT' in FirmId:  # Для фьючерсов свои расчеты
             # Видео: https://www.youtube.com/watch?v=u2C7ElpXZ4k
             # Баланс = Лимит откр.поз. + Вариац.маржа + Накоплен.доход
-            # Лимит откр.поз. - Сумма, которая была на счету вчера в 19:00 МСК (после вечернего клиринга)
-            # Вариац.маржа - Рассчитывается с 19:00 предыдущего дня без учета комисии. Перейдет в Накоплен.доход и обнулится в 14:00 (на дневном клиринге)
-            # Накоплен.доход - Включает Биржевые сборы
-            # Тек.чист.поз. - Заблокированное ГО под открытые позиции
-            # План.чист.поз. - На какую сумму можете открыть еще позиции
+            # Лимит откр.поз. = Сумма, которая была на счету вчера в 19:00 МСК (после вечернего клиринга)
+            # Вариац.маржа = Рассчитывается с 19:00 предыдущего дня без учета комисии. Перейдет в Накоплен.доход и обнулится в 14:00 (на дневном клиринге)
+            # Накоплен.доход включает Биржевые сборы
+            # Тек.чист.поз. = Заблокированное ГО под открытые позиции
+            # План.чист.поз. = На какую сумму можете открыть еще позиции
             try:
-                futuresLimit = self.qpProvider.GetFuturesLimit(FirmId, TradeAccountId, 0, 'SUR')['data']
+                futuresLimit = self.qpProvider.GetFuturesLimit(FirmId, TradeAccountId, 0, 'SUR')['data']  # Фьючерсные лимиты
                 return float(futuresLimit['cbplimit']) + float(futuresLimit['varmargin']) + float(futuresLimit['accruedint'])  # Лимит откр.поз. + Вариац.маржа + Накоплен.доход
             except Exception:  # При ошибке Futures limit returns nil
+                print(f'QUIK не вернул фьючерсные лимиты с FirmId={FirmId}, TradeAccountId={TradeAccountId}. Проверьте правильность значений')
                 return None
         # Для остальных фирм
         money_limits = self.qpProvider.GetMoneyLimits()['data']  # Все денежные лимиты (остатки на счетах)
-        cash = [moneyLimit for moneyLimit in money_limits  # Первый денежный лимит
+        if len(money_limits) == 0:  # Если денежных лимитов нет
+            print('QUIK не вернул денежные лимиты (остатки на счетах). Свяжитесь с брокером')
+            return None
+        cash = [moneyLimit for moneyLimit in money_limits  # Из всех денежных лимитов
                 if moneyLimit['client_code'] == ClientCode and  # выбираем по коду клиента
                 moneyLimit['firmid'] == FirmId and  # фирме
                 moneyLimit['limit_kind'] == LimitKind and  # дню лимита
-                moneyLimit["currcode"] == CurrencyCode][0]  # валюте
-        return float(cash['currentbal'])  # Денежный лимит (остаток) по счету
+                moneyLimit["currcode"] == CurrencyCode]  # и валюте
+        if len(cash) != 1:  # Если ни один денежный лимит не подходит
+            print(f'Денежный лимит не найден с ClientCode={ClientCode}, FirmId={FirmId}, LimitKind={LimitKind}, CurrencyCode={CurrencyCode}. Проверьте правильность значений')
+            # print(f'Полученные денежные лимиты: {money_limits}')  # Для отладки, если нужно разобраться, что указано неверно
+            return None
+        return float(cash[0]['currentbal'])  # Денежный лимит (остаток) по счету
 
     def GetPositionsLimits(self, FirmId, TradeAccountId):
         """Стоимость позиций по счету"""
