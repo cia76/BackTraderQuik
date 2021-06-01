@@ -180,12 +180,15 @@ class QKBroker(with_metaclass(MetaQKBroker, BrokerBase)):
             if isinstance(jsonOrder, int):  # Если заявка так и не была найдена
                 print(f'Заявка с номером {orderNum} не найдена на бирже со 2-ой попытки')
                 return  # то выходим, дальше не продолжаем
-
         transId = int(jsonOrder['trans_id'])  # Получаем номер транзакции из заявки с биржи
         if transId == 0:  # Заявки, выставленные не из автоторговли / только что (с нулевыми номерами транзакции)
             return  # не обрабатываем, пропускаем
         self.store.orderNums[transId] = orderNum  # Сохраняем номер заявки на бирже (может быть переход от стоп заявки к лимитной с изменением номера на бирже)
-
+        try:  # Бывает, что трейдеры совмещают авто и ручную торговлю. Это делать нельзя, но кто это будет слушать?
+            order: Order = self.store.orders[transId]  # Ищем заявку по номеру транзакции
+        except KeyError:  # Если пришла заявка из ручной торговли, то заявки по номеру транзакции в автоторговле не будет, получим ошибку
+            print(f'Заявка с номером {orderNum} и номером транзакции {transId} была выставлена не из торговой системы')
+            return  # выходим, дальше не продолжаем
         classCode = qkTrade['class_code']  # Код площадки
         secCode = qkTrade['sec_code']  # Код тикера
         dataname = self.store.ClassSecCodeToDataName(classCode, secCode)  # Получаем название тикера по коду площадки и коду тикера
@@ -194,7 +197,6 @@ class QKBroker(with_metaclass(MetaQKBroker, BrokerBase)):
             self.tradeNums[dataname] = []  # то ставим пустой список сделок
         elif tradeNum in self.tradeNums[dataname]:  # Если номер сделки есть в списке (фильтр для дублей)
             return  # то выходим, дальше не продолжаем
-
         self.tradeNums[dataname].append(tradeNum)  # Запоминаем номер сделки по тикеру, чтобы в будущем ее не обрабатывать (фильтр для дублей)
         size = int(qkTrade['qty'])  # Абсолютное кол-во
         if self.p.Lots:  # Если входящий остаток в лотах
@@ -202,8 +204,6 @@ class QKBroker(with_metaclass(MetaQKBroker, BrokerBase)):
         if qkTrade['flags'] & 0b100 == 0b100:  # Если сделка на продажу (бит 2)
             size *= -1  # то кол-во ставим отрицательным
         price = self.store.QKToBTPrice(classCode, secCode, float(qkTrade['price']))  # Переводим цену исполнения за лот в цену исполнения за штуку
-
-        order: Order = self.store.orders[transId]  # Ищем заявку по номеру транзакции
         try:  # TODO Очень редко возникает ошибка:
             # linebuffer.py, line 163, in __getitem__
             # return self.array[self.idx + ago]
