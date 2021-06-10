@@ -226,12 +226,12 @@ class QKStore(with_metaclass(MetaSingleton, object)):
         order.addcomminfo(CommInfo)  # По тикеру выставляем комиссии в заявку. Нужно для исполнения заявки в BackTrader
         classCode, secCode = self.DataNameToClassSecCode(data._dataname)  # Из названия тикера получаем код площадки и тикера
         size = self.SizeToLots(classCode, secCode, size)  # Размер позиции в лотах
-        price = 0.00  # Цена
+        if price is None:  # Если цена не указана для рыночных заявок
+            price = 0.00  # Цена рыночной заявки должна быть нулевой (кроме фьючерсов)
         if order.exectype == Order.Market:  # Для рыночных заявок
             if classCode == 'SPBFUT':  # Для рынка фьючерсов
                 lastPrice = float(self.qpProvider.GetParamEx(classCode, secCode, 'LAST')['data']['param_value'])  # Последняя цена сделки
                 price = lastPrice * 1.001 if IsBuy else lastPrice * 0.999  # Наихудшая цена (на 0.1% хуже последней цены). Все равно, заявка исполнится по рыночной цене
-            # Для остальных рынков цена рыночной заявки должна быть нулевой
         else:  # Для остальных заявок
             price = self.BTToQKPrice(classCode, secCode, price)  # Переводим цену из BackTrader в QUIK
         scale = int(self.GetSecurityInfo(classCode, secCode)['scale'])  # Кол-во значащих цифр после запятой
