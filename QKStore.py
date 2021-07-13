@@ -231,7 +231,8 @@ class QKStore(with_metaclass(MetaSingleton, object)):
         if order.exectype == Order.Market:  # Для рыночных заявок
             if classCode == 'SPBFUT':  # Для рынка фьючерсов
                 lastPrice = float(self.qpProvider.GetParamEx(classCode, secCode, 'LAST')['data']['param_value'])  # Последняя цена сделки
-                price = lastPrice * 1.001 if IsBuy else lastPrice * 0.999  # Наихудшая цена (на 0.1% хуже последней цены). Все равно, заявка исполнится по рыночной цене
+                minPriceStep = self.GetSecurityInfo(classCode, secCode)['min_price_step']  # Минимальный шаг цены
+                price = lastPrice + 10 * minPriceStep if IsBuy else lastPrice - 10 * minPriceStep  # Наихудшая цена (на 10 шагов хуже последней цены). Все равно, заявка исполнится по рыночной цене
         else:  # Для остальных заявок
             price = self.BTToQKPrice(classCode, secCode, price)  # Переводим цену из BackTrader в QUIK
         scale = int(self.GetSecurityInfo(classCode, secCode)['scale'])  # Кол-во значащих цифр после запятой
