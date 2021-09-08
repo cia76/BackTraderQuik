@@ -26,11 +26,11 @@ class QKData(with_metaclass(MetaQKData, AbstractDataBase)):
     def __init__(self, **kwargs):
         self.interval = self.p.compression  # Для минутных временнЫх интервалов ставим кол-во минут
         if self.p.timeframe == TimeFrame.Days:  # Дневной временной интервал
-            self.interval = 1440
-        elif self.p.timeframe == TimeFrame.Days:  # Недельный временной интервал
-            self.interval = 10080
+            self.interval = 1440  # В минутах
+        elif self.p.timeframe == TimeFrame.Weeks:  # Недельный временной интервал
+            self.interval = 10080  # В минутах
         elif self.p.timeframe == TimeFrame.Months:  # Месячный временной интервал
-            self.interval = 23200
+            self.interval = 23200  # В минутах
 
         self.store = QKStore(**kwargs)  # Передаем параметры в хранилище QUIK. Может работать самостоятельно, не через хранилище
         self.classCode, self.secCode = self.store.DataNameToClassSecCode(self.p.dataname)  # По тикеру получаем код площадки и код тикера
