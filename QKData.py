@@ -2,7 +2,7 @@ from datetime import datetime, timedelta
 import pytz
 
 from backtrader.feed import AbstractDataBase
-from backtrader import TimeFrame, date2num
+from backtrader import TimeFrame, date2num, num2date
 from backtrader.utils.py3 import with_metaclass
 
 from BackTraderQuik import QKStore
@@ -83,7 +83,19 @@ class QKData(with_metaclass(MetaQKData, AbstractDataBase)):
     def _load(self):
         """Загружаем бар из истории или новый бар в BackTrader"""
         if self.newCandleSubscribed:  # Если получаем новые бары по подписке
-            if self.jsonBar is None:  # Если новый бар еще не появился
+            if len(self.store.newBars) == 0:  # Если в хранилище новых баров ничего нет
+                return None  # то нового бара нет, будем заходить еще
+            newBars = [newBar for newBar in self.store.newBars  # Смотрим в хранилище новых баров
+                       if newBar['class'] == self.classCode and  # бары с нужным кодом площадки,
+                       newBar['sec'] == self.secCode and  # тикером,
+                       int(newBar['interval']) == self.interval]  # и интервалом
+            if len(newBars) == 0:  # Если новый бар еще не появился
+                return None  # то нового бара нет, будем заходить еще
+            self.jsonBar = newBars[0]  # Берем первый бар из выборки, с ним будем работать
+            self.store.newBars.remove(self.jsonBar)  # Убираем его из хранилища новых баров
+            jsonDateTime = self.jsonBar['datetime']  # Вытаскиваем составное значение даты и времени открытия бара
+            dt = datetime(jsonDateTime['year'], jsonDateTime['month'], jsonDateTime['day'], jsonDateTime['hour'], jsonDateTime['min'])  # Время открытия бара
+            if date2num(dt) <= self.lines.datetime[-1]:  # Если получили предыдущий или более старый бар
                 return None  # то нового бара нет, будем заходить еще
         else:  # Если получаем исторические данные
             if len(self.jsonBars) == 0:  # Если исторических данных нет (QUIK отключен от сервера брокера)
@@ -95,7 +107,6 @@ class QKData(with_metaclass(MetaQKData, AbstractDataBase)):
                     return False  # Больше сюда заходить не будем
                 # Принимаем новые бары
                 self.jsonBar = None  # Сбрасываем последний бар истории, чтобы он не дублировался как новый бар
-                self.store.qpProvider.OnNewCandle = self.OnNewCandle  # Получение нового бара. В первый раз получим все бары с начала прошлой сессии
                 self.store.qpProvider.SubscribeToCandles(self.classCode, self.secCode, self.interval)  # Подписываемся на новые бары
                 self.newCandleSubscribed = True  # Получаем новые бары по подписке
                 return None  # Будем заходить еще
@@ -139,7 +150,6 @@ class QKData(with_metaclass(MetaQKData, AbstractDataBase)):
         if self.newCandleSubscribed:  # Если принимали новые бары и подписались на них
             self.put_notification(self.DISCONNECTED)  # Отправляем уведомление об окончании получения новых баров
             self.store.qpProvider.UnsubscribeFromCandles(self.classCode, self.secCode, self.interval)  # Отменяем подписку на новые бары
-            self.store.qpProvider.OnNewCandle = self.store.qpProvider.DefaultHandler  # Возвращаем обработчик по умолчанию
         self.store.DataCls = None  # Удаляем класс данных в хранилище
 
     def OnNewCandle(self, data):

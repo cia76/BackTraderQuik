@@ -54,6 +54,7 @@ class QKStore(with_metaclass(MetaSingleton, object)):
         self.qpProvider = QuikPy(Host=self.p.Host, RequestsPort=self.p.RequestsPort, CallbacksPort=self.p.CallbacksPort)  # Вызываем конструктор QuikPy с адресом хоста и портами по умолчанию
         self.classCodes = self.qpProvider.GetClassesList()['data']  # Список классов. В некоторых таблицах тикер указывается без кода класса
         self.securityInfoList = []  # Кэш параметров тикеров
+        self.newBars = []  # Новые бары по подписке из QUIK
 
         self.positions = collections.defaultdict(Position)  # Список позиций
         self.orders = collections.OrderedDict()  # Список заявок
@@ -62,7 +63,7 @@ class QKStore(with_metaclass(MetaSingleton, object)):
         self.ocos = {}  # Список связанных заявок
 
     def start(self):
-        pass
+        self.qpProvider.OnNewCandle = self.OnNewCandle  # Обработчик новых баров по подписке из QUIK
 
     def put_notification(self, msg, *args, **kwargs):
         self.notifs.append((msg, args, kwargs))
@@ -73,7 +74,8 @@ class QKStore(with_metaclass(MetaSingleton, object)):
         return [x for x in iter(self.notifs.popleft, None)]
 
     def stop(self):
-        self.qpProvider.CloseConnectionAndThread()  # то закрываем соединение для запросов и поток обработки функций обратного вызова
+        self.qpProvider.OnNewCandle = self.qpProvider.DefaultHandler  # Возвращаем обработчик по умолчанию
+        self.qpProvider.CloseConnectionAndThread()  # Закрываем соединение для запросов и поток обработки функций обратного вызова
 
     # Функции конвертации
 
@@ -134,7 +136,7 @@ class QKStore(with_metaclass(MetaSingleton, object)):
 
         return Price  # В остальных случаях цена не изменяется
 
-    # QKBroker
+    # QKBroker: Функции
 
     def GetPositions(self, ClientCode, FirmId, LimitKind, Lots):
         """Все активные позиции по счету"""
@@ -316,6 +318,8 @@ class QKStore(with_metaclass(MetaSingleton, object)):
             ocoRef = self.ocos[order.ref]  # то получаем номер родительской заявки
             self.CancelOrder(self.orders[ocoRef])  # и удаляем родительскую заявку
 
+    # QKBroker: Обработка событий подключения к QUIK / отключения от QUIK
+
     def OnConnected(self, data):
         dt = datetime.now(QKStore.MarketTimeZone)  # Берем текущее время на рынке
         print(f'{dt.strftime("%d.%m.%Y %H:%M")}, QUIK Connected')
@@ -327,3 +331,8 @@ class QKStore(with_metaclass(MetaSingleton, object)):
         dt = datetime.now(QKStore.MarketTimeZone)  # Берем текущее время на рынке
         print(f'{dt.strftime("%d.%m.%Y %H:%M")}, QUIK Disconnected')
         self.isConnected = False  # QUIK отключен от сервера брокера
+
+    # QKData: Обработка событий получения новых баров
+
+    def OnNewCandle(self, data):
+        self.newBars.append(data['data'])  # Добавляем новый бар в список новых баров

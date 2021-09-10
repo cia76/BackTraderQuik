@@ -9,12 +9,13 @@ if __name__ == '__main__':  # Точка входа при запуске это
     # Несколько тикеров, один временной интервал
     symbol1 = 'TQBR.GAZP'
     symbol2 = 'TQBR.LKOH'
-    store = QKStore(Host='192.168.1.7')  # Хранилище QUIK
-    data = store.getdata(dataname=symbol1, timeframe=TimeFrame.Days, fromdate=datetime(2018, 1, 1))  # Исторические данные по первому тикеру
+    store = QKStore()  # Хранилище QUIK на локальном компьютере
+    # store = QKStore(Host='192.168.1.7')  # Хранилище QUIK на удаленном компьютере
+    data = store.getdata(dataname=symbol1, timeframe=TimeFrame.Minutes, compression=1, fromdate=datetime(2021, 9, 1), LiveBars=True)  # Исторические и новые бары по первому тикеру
     cerebro.adddata(data)  # Добавляем данные
-    data = store.getdata(dataname=symbol2, timeframe=TimeFrame.Days, fromdate=datetime(2018, 1, 1))  # Исторические данные по второму тикеру
+    data = store.getdata(dataname=symbol2, timeframe=TimeFrame.Minutes, compression=1, fromdate=datetime(2021, 9, 1), LiveBars=True)  # Исторические и новые бары по второму тикеру
     cerebro.adddata(data)  # Добавляем данные
     cerebro.addstrategy(ts.PrintStatusAndBars)  # Добавляем торговую систему
 
     cerebro.run()  # Запуск торговой системы
-    cerebro.plot()  # Рисуем график. Требуется matplotlib версии 3.2.2 (pip install matplotlib==3.2.2)
+    # cerebro.plot()  # Рисуем график. Требуется matplotlib версии 3.2.2 (pip install matplotlib==3.2.2)
