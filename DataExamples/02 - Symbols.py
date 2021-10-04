@@ -6,16 +6,15 @@ import Strategy as ts  # Торговые системы
 if __name__ == '__main__':  # Точка входа при запуске этого скрипта
     cerebro = Cerebro()  # Инициируем "движок" BackTrader
 
-    # Несколько тикеров, один временной интервал
-    symbol1 = 'TQBR.GAZP'
-    symbol2 = 'TQBR.LKOH'
+    symbols = ('TQBR.SBER', 'TQBR.GAZP', 'TQBR.LKOH', 'TQBR.GMKN',)  # Кортеж тикеров
     store = QKStore()  # Хранилище QUIK на локальном компьютере
     # store = QKStore(Host='192.168.1.7')  # Хранилище QUIK на удаленном компьютере
-    data = store.getdata(dataname=symbol1, timeframe=TimeFrame.Minutes, compression=1, fromdate=datetime(2021, 9, 1), LiveBars=True)  # Исторические и новые бары по первому тикеру
-    cerebro.adddata(data)  # Добавляем данные
-    data = store.getdata(dataname=symbol2, timeframe=TimeFrame.Minutes, compression=1, fromdate=datetime(2021, 9, 1), LiveBars=True)  # Исторические и новые бары по второму тикеру
-    cerebro.adddata(data)  # Добавляем данные
-    cerebro.addstrategy(ts.PrintStatusAndBars)  # Добавляем торговую систему
+    for symbol in symbols:  # Пробегаемся по всем тикерам
+        data = store.getdata(dataname=symbol, timeframe=TimeFrame.Minutes, compression=1, fromdate=datetime(2021, 10, 4), LiveBars=True)  # Исторические и новые бары по первому тикеру
+        cerebro.adddata(data)  # Добавляем данные
+    cerebro.addstrategy(ts.PrintStatusAndBars, name="One Ticker", symbols=('TQBR.SBER',))  # Добавляем торговую систему по одному тикеру
+    cerebro.addstrategy(ts.PrintStatusAndBars, name="Two Tickers", symbols=('TQBR.GAZP', 'TQBR.LKOH',))  # Добавляем торговую систему по двум тикерам
+    cerebro.addstrategy(ts.PrintStatusAndBars, name="All Tickers")  # Добавляем торговую систему по всем тикерам
 
     cerebro.run()  # Запуск торговой системы
     # cerebro.plot()  # Рисуем график. Требуется matplotlib версии 3.2.2 (pip install matplotlib==3.2.2)
