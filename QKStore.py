@@ -84,7 +84,6 @@ class QKStore(with_metaclass(MetaSingleton, object)):
         symbolParts = dataname.split('.')  # По разделителю пытаемся разбить тикер на части
         if len(symbolParts) == 2:  # Если тикер задан в формате <Код площадки>.<Код тикера>
             return symbolParts[0], symbolParts[1]  # то возвращаем код площадки и код тикера
-
         classCode = self.qpProvider.GetSecurityClass(self.classCodes, dataname)['data']  # Получаем класс по коду инструмента из заданных классов
         return classCode, dataname  # Возвращаем код площадки и код тикера
 
@@ -116,31 +115,30 @@ class QKStore(with_metaclass(MetaSingleton, object)):
         """Перевод цен из BackTrader в QUIK"""
         if ClassCode == 'TQOB':  # Для рынка облигаций
             return Price / 10  # цену делим на 10
-
         if ClassCode == 'SPBFUT':  # Для рынка фьючерсов
             securityLot = int(self.GetSecurityInfo(ClassCode, SecCode)['lot_size'])  # Размер лота тикера
             if securityLot > 0:  # Если лот задан
                 return Price * securityLot  # то цену умножаем на лот
-
         return Price  # В остальных случаях цена не изменяется
 
     def QKToBTPrice(self, ClassCode, SecCode, Price: float):
         """Перевод цен из QUIK в BackTrader"""
         if ClassCode == 'TQOB':  # Для рынка облигаций
             return Price * 10  # цену умножаем на 10
-
         if ClassCode == 'SPBFUT':  # Для рынка фьючерсов
             securityLot = int(self.GetSecurityInfo(ClassCode, SecCode)['lot_size'])  # Размер лота тикера
             if securityLot > 0:  # Если лот задан
                 return Price / securityLot  # то цену делим на лот
-
         return Price  # В остальных случаях цена не изменяется
 
     # QKBroker: Функции
 
-    def GetPositions(self, ClientCode, FirmId, LimitKind, Lots):
-        """Все активные позиции по счету"""
-        if 'SPBFUT' in FirmId:  # Для фьючерсов свои расчеты
+    def GetPositions(self, ClientCode, FirmId, LimitKind, Lots, IsFutures=False):
+        """
+        Все активные позиции по счету
+        Для фьючерсных счетов нужно установить параметр IsFutures=True
+        """
+        if IsFutures:  # Для фьючерсов свои расчеты
             futuresHoldings = self.qpProvider.GetFuturesHoldings()['data']  # Все фьючерсные позиции
             activeFuturesHoldings = [futuresHolding for futuresHolding in futuresHoldings if futuresHolding['totalnet'] != 0]  # Активные фьючерсные позиции
             for activeFuturesHolding in activeFuturesHoldings:  # Пробегаемся по всем активным фьючерсным позициям
@@ -171,9 +169,12 @@ class QKStore(with_metaclass(MetaSingleton, object)):
                 dataname = self.ClassSecCodeToDataName(classCode, secCode)  # Получаем название тикера по коду площадки и коду тикера
                 self.positions[dataname] = Position(size, price)  # Сохраняем в списке открытых позиций
 
-    def GetMoneyLimits(self, ClientCode, FirmId, TradeAccountId, LimitKind, CurrencyCode):
-        """Свободные средства по счету"""
-        if 'SPBFUT' in FirmId:  # Для фьючерсов свои расчеты
+    def GetMoneyLimits(self, ClientCode, FirmId, TradeAccountId, LimitKind, CurrencyCode, IsFutures=False):
+        """
+        Свободные средства по счету
+        Для фьючерсных счетов нужно установить параметр IsFutures=True
+        """
+        if IsFutures:  # Для фьючерсов свои расчеты
             # Видео: https://www.youtube.com/watch?v=u2C7ElpXZ4k
             # Баланс = Лимит откр.поз. + Вариац.маржа + Накоплен.доход
             # Лимит откр.поз. = Сумма, которая была на счету вчера в 19:00 МСК (после вечернего клиринга)
@@ -203,14 +204,16 @@ class QKStore(with_metaclass(MetaSingleton, object)):
             return None
         return float(cash[0]['currentbal'])  # Денежный лимит (остаток) по счету
 
-    def GetPositionsLimits(self, FirmId, TradeAccountId):
-        """Стоимость позиций по счету"""
-        if 'SPBFUT' in FirmId:  # Для фьючерсов свои расчеты
+    def GetPositionsLimits(self, FirmId, TradeAccountId, IsFutures=False):
+        """
+        Стоимость позиций по счету
+        Для фьючерсных счетов нужно установить параметр IsFutures=True
+        """
+        if IsFutures:  # Для фьючерсов свои расчеты
             try:
                 return float(self.qpProvider.GetFuturesLimit(FirmId, TradeAccountId, 0, 'SUR')['data']['cbplused'])  # Тек.чист.поз. (аблокированное ГО под открытые позиции)
             except Exception:  # При ошибке Futures limit returns nil
                 return None
-
         # Для остальных фирм
         posValue = 0  # Стоимость позиций по счету
         for dataname, pos in self.positions.items():  # Пробегаемся по всем открытым позициям

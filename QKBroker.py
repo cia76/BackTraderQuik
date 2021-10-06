@@ -28,7 +28,9 @@ class QKBroker(with_metaclass(MetaQKBroker, BrokerBase)):
         ('FirmId', 'SPBFUT'),  # Фирма
         ('TradeAccountId', 'SPBFUT00PST'),  # Счет
         ('LimitKind', 0),  # День лимита
-        ('CurrencyCode', 'SUR'))  # Валюта
+        ('CurrencyCode', 'SUR'),  # Валюта
+        ('IsFutures', True),  # Фьючерсный счет
+    )
 
     def __init__(self, **kwargs):
         super(QKBroker, self).__init__()
@@ -43,7 +45,7 @@ class QKBroker(with_metaclass(MetaQKBroker, BrokerBase)):
         self.startingcash = self.cash = self.getcash()  # Стартовые и текущие свободные средства по счету
         self.startingvalue = self.value = self.getvalue()  # Стартовый и текущий баланс счета
         if self.p.use_positions:  # Если нужно при запуске брокера получить текущие позиции на бирже
-            self.store.GetPositions(self.p.ClientCode, self.p.FirmId, self.p.LimitKind, self.p.Lots)  # То получаем их
+            self.store.GetPositions(self.p.ClientCode, self.p.FirmId, self.p.LimitKind, self.p.Lots, self.p.IsFutures)  # То получаем их
         self.store.qpProvider.OnConnected = self.store.OnConnected  # Соединение терминала с сервером QUIK
         self.store.qpProvider.OnDisconnected = self.store.OnDisconnected  # Отключение терминала от сервера QUIK
         self.store.qpProvider.OnTransReply = self.OnTransReply  # Ответ на транзакцию пользователя
@@ -52,7 +54,7 @@ class QKBroker(with_metaclass(MetaQKBroker, BrokerBase)):
     def getcash(self):
         """Свободные средства по счету"""
         if self.store.BrokerCls is not None:  # Если брокер есть в хранилище
-            cash = self.store.GetMoneyLimits(self.p.ClientCode, self.p.FirmId, self.p.TradeAccountId, self.p.LimitKind, self.p.CurrencyCode)
+            cash = self.store.GetMoneyLimits(self.p.ClientCode, self.p.FirmId, self.p.TradeAccountId, self.p.LimitKind, self.p.CurrencyCode, self.p.IsFutures)
             if cash is not None:  # Если свободные средства были получены
                 self.cash = cash  # то запоминаем их
         return self.cash  # Возвращаем последние известные свободные средства
@@ -60,7 +62,7 @@ class QKBroker(with_metaclass(MetaQKBroker, BrokerBase)):
     def getvalue(self, datas=None):
         """Баланс счета"""
         if self.store.BrokerCls is not None:  # Если брокер есть в хранилище
-            value = self.store.GetPositionsLimits(self.p.FirmId, self.p.TradeAccountId)
+            value = self.store.GetPositionsLimits(self.p.FirmId, self.p.TradeAccountId, self.p.IsFutures)
             if value is not None:  # Если баланс счета был получен
                 self.value = value  # то запоминаем его
         return self.getcash() + self.value  # Возвращаем последний известный баланс счета
