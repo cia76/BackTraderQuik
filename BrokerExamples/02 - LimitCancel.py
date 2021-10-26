@@ -13,7 +13,7 @@ class LimitCancel(bt.Strategy):
     )
     def log(self, txt, dt=None):
         """Вывод строки с датой на консоль"""
-        dt = bt.num2date(self.datas[0].datetime[0]) if dt is None else dt # Заданная дата или дата текущего бара
+        dt = bt.num2date(self.datas[0].datetime[0]) if dt is None else dt  # Заданная дата или дата текущего бара
         print(f'{dt.strftime("%d.%m.%Y %H:%M")}, {txt}')  # Выводим дату и время с заданным текстом на консоль
 
     def __init__(self):
