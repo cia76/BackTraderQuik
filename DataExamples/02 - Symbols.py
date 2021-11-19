@@ -7,8 +7,8 @@ if __name__ == '__main__':  # Точка входа при запуске это
     cerebro = Cerebro()  # Инициируем "движок" BackTrader
 
     symbols = ('TQBR.SBER', 'TQBR.GAZP', 'TQBR.LKOH', 'TQBR.GMKN',)  # Кортеж тикеров
-    store = QKStore()  # Хранилище QUIK на локальном компьютере
-    # store = QKStore(Host='192.168.1.7')  # Хранилище QUIK на удаленном компьютере
+    store = QKStore()  # Хранилище QUIK (QUIK на локальном компьютере)
+    # store = QKStore(Host='<Ваш IP адрес>')  # Хранилище QUIK (К QUIK на удаленном компьютере обращаемся по IP или названию)
     for symbol in symbols:  # Пробегаемся по всем тикерам
         data = store.getdata(dataname=symbol, timeframe=TimeFrame.Minutes, compression=1, fromdate=datetime(2021, 10, 4), LiveBars=True)  # Исторические и новые бары по первому тикеру
         cerebro.adddata(data)  # Добавляем данные

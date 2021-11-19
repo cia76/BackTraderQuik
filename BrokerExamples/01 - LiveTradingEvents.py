@@ -61,15 +61,15 @@ if __name__ == '__main__':  # Точка входа при запуске это
     clientCode = '<Ваш код клиента>'  # Код клиента (присваивается брокером)
     firmId = '<Код фирмы>'  # Код фирмы (присваивается брокером)
     # symbol = 'TQBR.GAZP'
-    symbol = 'SPBFUT.SiZ1'
+    symbol = 'SPBFUT.SiH2'
 
     cerebro.addstrategy(LiveTradingEvents)  # Добавляем торговую систему
-    # broker = QKBroker(Host='192.168.1.7')  # Можно вызывать данные напрямую (не рекомендуется)
-    # store = QKStore(Host='192.168.1.7')  # Хранилище QUIK (К QUIK на удаленном компьютере обращаемся по IP или названию)
+    # broker = QKBroker(Host='<Ваш IP адрес>')  # Можно вызывать данные напрямую (не рекомендуется)
     store = QKStore()  # Хранилище QUIK (QUIK на локальном компьютере)
+    # store = QKStore(Host='<Ваш IP адрес>')  # Хранилище QUIK (К QUIK на удаленном компьютере обращаемся по IP или названию)
     broker = store.getbroker()  # Брокер со счетом по умолчанию (срочный рынок РФ)
     # broker = store.getbroker(ClientCode=clientCode, FirmId=firmId, TradeAccountId='L01-00000F00', LimitKind=2, CurrencyCode='SUR', IsFutures=False)  # Брокер со счетом фондового рынка РФ
     cerebro.setbroker(broker)  # Устанавливаем брокера
-    data = store.getdata(dataname=symbol, timeframe=bt.TimeFrame.Minutes, compression=1, fromdate=datetime(2021, 10, 1, 10, 00), LiveBars=True)  # Исторические и новые минутные бары за все время
+    data = store.getdata(dataname=symbol, timeframe=bt.TimeFrame.Minutes, compression=1, fromdate=datetime(2021, 11, 19, 7, 00), LiveBars=True)  # Исторические и новые минутные бары с заданной даты
     cerebro.adddata(data)  # Добавляем данные
     cerebro.run()  # Запуск торговой системы

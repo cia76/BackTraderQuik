@@ -7,7 +7,8 @@ if __name__ == '__main__':  # Точка входа при запуске это
 
     # Тестирование на меньшем временнОм интервале (Replay)
     symbol = 'TQBR.GAZP'
-    store = QKStore(Host='192.168.1.7')
+    store = QKStore()  # Хранилище QUIK (QUIK на локальном компьютере)
+    # store = QKStore(Host='<Ваш IP адрес>')  # Хранилище QUIK (К QUIK на удаленном компьютере обращаемся по IP или названию)
     data = store.getdata(dataname=symbol, timeframe=TimeFrame.Minutes, compression=5)  # Исторические данные по самому меньшему временному интервалу
     cerebro.replaydata(data, timeframe=TimeFrame.Days)  # На графике видим большой интервал, прогоняем ТС на меньшем
     cerebro.addstrategy(ts.PrintStatusAndBars)  # Добавляем торговую систему

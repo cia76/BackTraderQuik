@@ -9,7 +9,8 @@ if __name__ == '__main__':  # Точка входа при запуске это
     symbols = ['SPBFUT.SiH9', 'SPBFUT.SiM9', 'SPBFUT.SiU9', 'SPBFUT.SiZ9',
     'SPBFUT.SiH0', 'SPBFUT.SiM0', 'SPBFUT.SiU0', 'SPBFUT.SiZ0',
     'SPBFUT.SiH1', 'SPBFUT.SiM1', 'SPBFUT.SiU1', 'SPBFUT.SiZ1']  # Тикеры для склейки
-    store = QKStore(Host='192.168.1.7')
+    store = QKStore()  # Хранилище QUIK (QUIK на локальном компьютере)
+    # store = QKStore(Host='<Ваш IP адрес>')  # Хранилище QUIK (К QUIK на удаленном компьютере обращаемся по IP или названию)
     data = [store.getdata(dataname=symbol, timeframe=TimeFrame.Minutes, compression=5) for symbol in symbols]  # Получаем по ним исторические данные
     cerebro.rolloverdata(name='Si', *data, checkdate=True, checkcondition=True)  # Склеенный тикер
     cerebro.addstrategy(ts.PrintStatusAndBars)  # Добавляем торговую систему

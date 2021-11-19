@@ -8,7 +8,8 @@ if __name__ == '__main__':  # Точка входа при запуске это
 
     # Несколько временнЫх интервалов, прямая загрузка
     symbol = 'TQBR.GAZP'
-    store = QKStore(Host='192.168.1.7')
+    store = QKStore()  # Хранилище QUIK (QUIK на локальном компьютере)
+    # store = QKStore(Host='<Ваш IP адрес>')  # Хранилище QUIK (К QUIK на удаленном компьютере обращаемся по IP или названию)
     data = store.getdata(dataname=symbol, timeframe=TimeFrame.Minutes, compression=1, fromdate=datetime(2020, 1, 1))  # Исторические данные по малому временнОму интервалу (должен идти первым)
     cerebro.adddata(data)  # Добавляем данные
     data = store.getdata(dataname=symbol, timeframe=TimeFrame.Days, fromdate=datetime(2020, 1, 1))  # Исторические данные по большому временнОму интервалу

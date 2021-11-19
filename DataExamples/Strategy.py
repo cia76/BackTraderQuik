@@ -30,12 +30,12 @@ class PrintStatusAndBars(bt.Strategy):
                 return  # то еще не пришли все новые бары. Ждем дальше, выходим
             print(self.p.name)
         for data in self.datas:  # Пробегаемся по всем запрошенным тикерам
-            if self.p.symbols == '' or data.p.dataname in self.p.symbols:  # Если торгуем все тикеры или данный тикер
-                self.log(f'{data.p.dataname} Open={data.open[0]:.2f}, High={data.high[0]:.2f}, Low={data.low[0]:.2f}, Close={data.close[0]:.2f}, Volume={data.volume[0]:.0f}',
+            if self.p.symbols == '' or data._dataname in self.p.symbols:  # Если торгуем все тикеры или данный тикер
+                self.log(f'{data._dataname} - {bt.TimeFrame.Names[data.p.timeframe]} {data.p.compression} - Open={data.open[0]:.2f}, High={data.high[0]:.2f}, Low={data.low[0]:.2f}, Close={data.close[0]:.2f}, Volume={data.volume[0]:.0f}',
                      bt.num2date(data.datetime[0]))
 
     def notify_data(self, data, status, *args, **kwargs):
         """Изменение статсуса приходящих баров"""
         dataStatus = data._getstatusname(status)  # Получаем статус (только при LiveBars=True)
-        print(f'{data.p.dataname} - {dataStatus}')  # Статус приходит для каждого тикера отдельно
+        print(f'{data._dataname} - {dataStatus}')  # Статус приходит для каждого тикера отдельно
         self.isLive = dataStatus == 'LIVE'  # В Live режим переходим после перехода первого тикера

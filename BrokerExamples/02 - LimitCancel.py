@@ -77,16 +77,16 @@ if __name__ == '__main__':  # Точка входа при запуске это
     clientCode = '<Ваш код клиента>'  # Код клиента (присваивается брокером)
     firmId = '<Код фирмы>'  # Код фирмы (присваивается брокером)
     # symbol = 'TQBR.GAZP'
-    symbol = 'SPBFUT.SiZ1'
+    symbol = 'SPBFUT.SiH2'
 
     cerebro.addstrategy(LimitCancel, LimitPct=1)  # Добавляем торговую систему с параметрами
-    # store = QKStore(Host='192.168.1.7')  # Хранилище QUIK (QUIK на удаленном компьютере)
     store = QKStore()  # Хранилище QUIK (QUIK на локальном компьютере)
+    # store = QKStore(Host='<Ваш IP адрес>')  # Хранилище QUIK (QUIK на удаленном компьютере)
     broker = store.getbroker(use_positions=False)  # Брокер со счетом по умолчанию (срочный рынок РФ)
     # broker = store.getbroker(use_positions=False, ClientCode=clientCode, FirmId=firmId, TradeAccountId='L01-00000F00', LimitKind=2, CurrencyCode='SUR', IsFutures=False)  # Брокер со счетом фондового рынка РФ
 
     cerebro.setbroker(broker)  # Устанавливаем брокера
-    data = store.getdata(dataname=symbol, timeframe=bt.TimeFrame.Minutes, compression=1, fromdate=datetime(2021, 10, 1, 10, 00), LiveBars=True)  # Исторические и новые минутные бары за все время
+    data = store.getdata(dataname=symbol, timeframe=bt.TimeFrame.Minutes, compression=1, fromdate=datetime(2021, 11, 19, 8, 00), LiveBars=True)  # Исторические и новые минутные бары за все время
     cerebro.adddata(data)  # Добавляем данные
     cerebro.addsizer(bt.sizers.FixedSize, stake=1000)  # Кол-во акций для покупки/продажи
     cerebro.run()  # Запуск торговой системы
