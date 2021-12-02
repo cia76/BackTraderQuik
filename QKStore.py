@@ -53,6 +53,7 @@ class QKStore(with_metaclass(MetaSingleton, object)):
         self.isConnected = True  # Считаем, что изначально QUIK подключен к серверу брокера
         self.qpProvider = QuikPy(Host=self.p.Host, RequestsPort=self.p.RequestsPort, CallbacksPort=self.p.CallbacksPort)  # Вызываем конструктор QuikPy с адресом хоста и портами по умолчанию
         self.classCodes = self.qpProvider.GetClassesList()['data']  # Список классов. В некоторых таблицах тикер указывается без кода класса
+        self.subscribedSymbols = []  # Список подписанных тикеров/интервалов
         self.securityInfoList = []  # Кэш параметров тикеров
         self.newBars = []  # Новые бары по подписке из QUIK
 
@@ -327,6 +328,17 @@ class QKStore(with_metaclass(MetaSingleton, object)):
         dt = datetime.now(QKStore.MarketTimeZone)  # Берем текущее время на рынке
         print(f'{dt.strftime("%d.%m.%Y %H:%M")}, QUIK Connected')
         self.isConnected = True  # QUIK подключен к серверу брокера
+        print(f'Проверка подписки тикеров ({len(self.subscribedSymbols)})')
+        for subscribedSymbol in self.subscribedSymbols:  # Пробегаемся по всем подписанным тикерам
+            classCode = subscribedSymbol['classCode']  # Код площадки
+            secCode = subscribedSymbol['secCode']  # Код тикера
+            interval = subscribedSymbol['interval']  # Временной интервал
+            print(f'{classCode}.{secCode} на интервале {interval}', end=' ')
+            if not self.store.qpProvider.IsSubscribed(classCode, secCode, interval):  # Если нет подписки на тикер/интервал
+                self.store.qpProvider.SubscribeToCandles(classCode, secCode, interval)  # то переподписываемся
+                print('нет подписки. Отправлен запрос на новую подписку')
+            else:  # Если подписка была, то переподписываться не нужно
+                print('есть подписка')
 
     def OnDisconnected(self, data):
         if not self.isConnected:  # Если QUIK отключен от сервера брокера
