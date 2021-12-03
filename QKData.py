@@ -109,7 +109,7 @@ class QKData(with_metaclass(MetaQKData, AbstractDataBase)):
                 self.jsonBar = None  # Сбрасываем последний бар истории, чтобы он не дублировался как новый бар
                 if not self.store.qpProvider.IsSubscribed(self.classCode, self.secCode, self.interval):  # Если не было подписки на тикер/интервал
                     self.store.qpProvider.SubscribeToCandles(self.classCode, self.secCode, self.interval)  # Подписываемся на новые бары
-                    subscribedSymbol = []  # Будем добавлять этот тикер/итервал в список
+                    subscribedSymbol = {}  # Будем добавлять этот тикер/итервал в словарь
                     subscribedSymbol['classCode'] = self.classCode  # Код площадки
                     subscribedSymbol['secCode'] = self.secCode  # Код тикера
                     subscribedSymbol['interval'] = self.interval  # Временной интервал
