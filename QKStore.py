@@ -29,7 +29,8 @@ class QKStore(with_metaclass(MetaSingleton, object)):
     params = (
         ('Host', '127.0.0.1'),  # Адрес/IP компьютера с QUIK
         ('RequestsPort', 34130),  # Номер порта для запросов и ответов
-        ('CallbacksPort', 34131))  # Номер порта для получения событий
+        ('CallbacksPort', 34131),  # Номер порта для получения событий
+    )
 
     BrokerCls = None  # Класс брокера будет задан из брокера
     DataCls = None  # Класс данных будет задан из данных
@@ -39,12 +40,12 @@ class QKStore(with_metaclass(MetaSingleton, object)):
 
     @classmethod
     def getdata(cls, *args, **kwargs):
-        """Returns `DataCls` with args, kwargs"""
+        """Returns DataCls with args, kwargs"""
         return cls.DataCls(*args, **kwargs)
 
     @classmethod
     def getbroker(cls, *args, **kwargs):
-        """Returns broker with *args, **kwargs from registered `BrokerCls`"""
+        """Returns broker with *args, **kwargs from registered BrokerCls"""
         return cls.BrokerCls(*args, **kwargs)
 
     def __init__(self):
@@ -212,7 +213,7 @@ class QKStore(with_metaclass(MetaSingleton, object)):
         """
         if IsFutures:  # Для фьючерсов свои расчеты
             try:
-                return float(self.qpProvider.GetFuturesLimit(FirmId, TradeAccountId, 0, 'SUR')['data']['cbplused'])  # Тек.чист.поз. (аблокированное ГО под открытые позиции)
+                return float(self.qpProvider.GetFuturesLimit(FirmId, TradeAccountId, 0, 'SUR')['data']['cbplused'])  # Тек.чист.поз. (Заблокированное ГО под открытые позиции)
             except Exception:  # При ошибке Futures limit returns nil
                 return None
         # Для остальных фирм
@@ -225,7 +226,9 @@ class QKStore(with_metaclass(MetaSingleton, object)):
         return posValue  # Стоимость позиций по счету
 
     def PlaceOrder(self, ClientCode, TradeAccountId, owner, data, size, price=None, plimit=None, exectype=None, valid=None, oco=None, CommInfo=None, IsBuy=True, **kwargs):
-        # TODO: Организовать работу группы заявок с 'parent' и 'transmit'
+        # TODO: Организовать постановку/снятие 3-х заявок (Bracket Orders) через buy_bracket и sell_bracket
+        # TODO: Организовать постановку/снятие любой цепочки заявок через параметры 'parent' и 'transmit'
+        # TODO: По статье https://backtrader.com/docu/order-creation-execution/bracket/bracket/
         order = BuyOrder(owner=owner, data=data, size=size, price=price, pricelimit=plimit, exectype=exectype, oco=oco) if IsBuy \
             else SellOrder(owner=owner, data=data, size=size, price=price, pricelimit=plimit, exectype=exectype, oco=oco)  # Заявка на покупку/продажу
         order.addinfo(**kwargs)  # Передаем все дополнительные параметры
@@ -261,7 +264,7 @@ class QKStore(with_metaclass(MetaSingleton, object)):
             if slippage.is_integer():  # Целое значение проскальзывания мы должны отправлять без десятичных знаков
                 slippage = int(slippage)  # поэтому, приводим такое проскальзывание к целому числу
             if plimit is not None:  # Если задана лимитная цена исполнения
-                limitPrice = plimit  # то ее и берем
+                limitPrice = round(plimit, scale)  # то ее и берем, округлив цену до кол-ва значащих цифр
             elif IsBuy:  # Если цена не задана, и покупаем
                 limitPrice = price + slippage  # то будем покупать по большей цене в размер проскальзывания
             else:  # Если цена не задана, и продаем
@@ -330,11 +333,11 @@ class QKStore(with_metaclass(MetaSingleton, object)):
         self.isConnected = True  # QUIK подключен к серверу брокера
         print(f'Проверка подписки тикеров ({len(self.subscribedSymbols)})')
         for subscribedSymbol in self.subscribedSymbols:  # Пробегаемся по всем подписанным тикерам
-            classCode = subscribedSymbol['classCode']  # Код площадки
-            secCode = subscribedSymbol['secCode']  # Код тикера
+            classCode = subscribedSymbol['class']  # Код площадки
+            secCode = subscribedSymbol['sec']  # Код тикера
             interval = subscribedSymbol['interval']  # Временной интервал
             print(f'{classCode}.{secCode} на интервале {interval}', end=' ')
-            if not self.store.qpProvider.IsSubscribed(classCode, secCode, interval):  # Если нет подписки на тикер/интервал
+            if not self.store.qpProvider.IsSubscribed(classCode, secCode, interval)['data']:  # Если нет подписки на тикер/интервал
                 self.store.qpProvider.SubscribeToCandles(classCode, secCode, interval)  # то переподписываемся
                 print('нет подписки. Отправлен запрос на новую подписку')
             else:  # Если подписка была, то переподписываться не нужно

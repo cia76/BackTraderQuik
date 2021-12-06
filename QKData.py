@@ -17,10 +17,11 @@ class MetaQKData(AbstractDataBase.__class__):
 class QKData(with_metaclass(MetaQKData, AbstractDataBase)):
     """Данные QUIK"""
     params = (
-        ('LiveBars', False),)  # Только исторические данные
+        ('LiveBars', False),  # False - только история, True - история и новые бары
+    )
 
     def islive(self):
-        """Если подаем новые бары, то ``Cerebro`` не будет запускать ``preload`` и ``runonce``, т.к. новые бары должны идти один за другим"""
+        """Если подаем новые бары, то Cerebro не будет запускать preload и runonce, т.к. новые бары должны идти один за другим"""
         return self.p.LiveBars
 
     def __init__(self, **kwargs):
@@ -69,7 +70,6 @@ class QKData(with_metaclass(MetaQKData, AbstractDataBase)):
         if barsCount == 0:  # Если бары не получены
             self.put_notification(self.DISCONNECTED)  # то отправляем уведомление о невозможности отправки исторических баров
             return  # выходим, дальше не продолжаем
-
         self.put_notification(self.CONNECTED)  # Отправляем уведомление об успешном подключении
         self.lastBarId = barsCount - 1  # Последний номер бара
         jsonDateTime = self.jsonBars[self.lastBarId]['datetime']  # Вытаскиваем составное значение даты и времени открытия бара
@@ -107,18 +107,14 @@ class QKData(with_metaclass(MetaQKData, AbstractDataBase)):
                     return False  # Больше сюда заходить не будем
                 # Принимаем новые бары
                 self.jsonBar = None  # Сбрасываем последний бар истории, чтобы он не дублировался как новый бар
-                if not self.store.qpProvider.IsSubscribed(self.classCode, self.secCode, self.interval):  # Если не было подписки на тикер/интервал
+                if not self.store.qpProvider.IsSubscribed(self.classCode, self.secCode, self.interval)['data']:  # Если не было подписки на тикер/интервал
                     self.store.qpProvider.SubscribeToCandles(self.classCode, self.secCode, self.interval)  # Подписываемся на новые бары
-                    subscribedSymbol = {}  # Будем добавлять этот тикер/итервал в словарь
-                    subscribedSymbol['classCode'] = self.classCode  # Код площадки
-                    subscribedSymbol['secCode'] = self.secCode  # Код тикера
-                    subscribedSymbol['interval'] = self.interval  # Временной интервал
+                    subscribedSymbol = {'class': self.classCode, 'sec': self.secCode, 'interval': self.interval}  # Будем добавлять этот тикер/итервал в словарь
                     self.store.subscribedSymbols.append(subscribedSymbol)  # Добавляем в список подписанных тикеров/интервалов
-                self.newCandleSubscribed = True  # Получаем новые бары по подписке
+                self.newCandleSubscribed = True  # Дальше будем получать новые бары по подписке
                 return None  # Будем заходить еще
             else:  # Если еще не получили все бары из истории
                 self.jsonBar = self.jsonBars[self.barId]  # Получаем следующий бар из истории
-
         # Исторический / новый бар
         jsonDateTime = self.jsonBar['datetime']  # Вытаскиваем составное значение даты и времени открытия бара
         dt = datetime(jsonDateTime['year'], jsonDateTime['month'], jsonDateTime['day'], jsonDateTime['hour'], jsonDateTime['min'])  # Время открытия бара
@@ -129,12 +125,10 @@ class QKData(with_metaclass(MetaQKData, AbstractDataBase)):
         self.lines.close[0] = self.store.QKToBTPrice(self.classCode, self.secCode,  self.jsonBar['close'])
         self.lines.volume[0] = self.jsonBar['volume']
         self.lines.openinterest[0] = 0  # Открытый интерес в QUIK не учитывается
-
         # Исторический бар
         if self.barId <= self.lastBarId:  # Если еще не получили все бары из истории
             self.barId += 1  # то переходим на следующий бар
             return True  # Будем заходить сюда еще
-
         # Новый бар
         timeOpen = self.p.tz.localize(dt)  # Биржевое время открытия бара
         timeNextClose = timeOpen + timedelta(minutes=self.interval*2)  # Биржевое время закрытия следующего бара
@@ -147,7 +141,6 @@ class QKData(with_metaclass(MetaQKData, AbstractDataBase)):
         elif self.lifeMode and timeNextClose <= timeMarketNow:  # Если в режиме получения новых баров, и следующий бар закроется до текущего времени на бирже
             self.put_notification(self.DELAYED)  # Отправляем уведомление об отправке исторических (не новых) баров
             self.lifeMode = False  # Переходим в режим получения истории
-
         self.jsonBar = None  # Сбрасываем текущий бар
         return True  # Будем заходить еще
 
