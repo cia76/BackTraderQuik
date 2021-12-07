@@ -57,7 +57,6 @@ class QKStore(with_metaclass(MetaSingleton, object)):
         self.subscribedSymbols = []  # Список подписанных тикеров/интервалов
         self.securityInfoList = []  # Кэш параметров тикеров
         self.newBars = []  # Новые бары по подписке из QUIK
-
         self.positions = collections.defaultdict(Position)  # Список позиций
         self.orders = collections.OrderedDict()  # Список заявок
         self.newTransId = 1  # Следующий внутренний номер транзакции заявки (задается пользователем)
@@ -337,8 +336,8 @@ class QKStore(with_metaclass(MetaSingleton, object)):
             secCode = subscribedSymbol['sec']  # Код тикера
             interval = subscribedSymbol['interval']  # Временной интервал
             print(f'{classCode}.{secCode} на интервале {interval}', end=' ')
-            if not self.store.qpProvider.IsSubscribed(classCode, secCode, interval)['data']:  # Если нет подписки на тикер/интервал
-                self.store.qpProvider.SubscribeToCandles(classCode, secCode, interval)  # то переподписываемся
+            if not self.qpProvider.IsSubscribed(classCode, secCode, interval)['data']:  # Если нет подписки на тикер/интервал
+                self.qpProvider.SubscribeToCandles(classCode, secCode, interval)  # то переподписываемся
                 print('нет подписки. Отправлен запрос на новую подписку')
             else:  # Если подписка была, то переподписываться не нужно
                 print('есть подписка')
