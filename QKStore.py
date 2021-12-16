@@ -282,8 +282,11 @@ class QKStore(with_metaclass(MetaSingleton, object)):
         self.newTransId += 1  # Увеличиваем номер транзакции для будущих заявок
         if oco is not None:  # Если есть связанная заявка
             self.ocos[order.ref] = oco.ref  # то заносим в список родительских заявок
-        self.qpProvider.SendTransaction(transaction)  # Отправляем транзакцию на рынок
+        response = self.qpProvider.SendTransaction(transaction)  # Отправляем транзакцию на рынок
         order.submit(self)  # Переводим заявку в статус Order.Submitted
+        if response['cmd'] == 'lua_transaction_error':  # Если возникла ошибка при постановке заявки на уровне QUIK
+            print(f'{response["data"]["CLASSCODE"]}.{response["data"]["SECCODE"]}{response["lua_error"]}')  # то заявка не отправляется на биржу, выводим сообщение об ошибке
+            order.reject()  # Переводим заявку в статус Order.Reject
         self.orders[order.ref] = order  # Сохраняем в списке заявок
         return order  # Возвращаем заявку
 
