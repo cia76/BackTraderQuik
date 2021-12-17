@@ -41,7 +41,7 @@ class QKData(with_metaclass(MetaQKData, AbstractDataBase)):
         self.jsonBar = None  # Текущий бар
         self.barId = 0  # Начинаем загрузку баров в BackTrader с начала (нулевого бара)
         self.newCandleSubscribed = False  # Наличие подписки на получение новых баров
-        self.lifeMode = False  # Режим. False = Получение истории, True = Получение новых баров
+        self.liveMode = False  # Режим. False = Получение истории, True = Получение новых баров
 
     def setenvironment(self, env):
         """Добавление хранилища QUIK в cerebro"""
@@ -97,6 +97,10 @@ class QKData(with_metaclass(MetaQKData, AbstractDataBase)):
             dt = datetime(jsonDateTime['year'], jsonDateTime['month'], jsonDateTime['day'], jsonDateTime['hour'], jsonDateTime['min'])  # Время открытия бара
             if date2num(dt) <= self.lines.datetime[-1]:  # Если получили предыдущий или более старый бар
                 return None  # то нового бара нет, будем заходить еще
+            dtMarketBarClose = dt + timedelta(minutes=self.interval)  # Биржевое время закрытия бара
+            dtMarketNow = self.GetQUIKDateTimeNow()  # Текущее биржевое время из QUIK
+            if dtMarketBarClose > dtMarketNow:  # Если получили несформированный бар. Например, дневной бар в середине сессии
+                return None  # то нового бара нет, будем заходить еще
         else:  # Если получаем исторические данные
             if len(self.jsonBars) == 0:  # Если исторических данных нет (QUIK отключен от сервера брокера)
                 self.put_notification(self.DISCONNECTED)  # Отправляем уведомление об окончании получения исторических баров
@@ -130,17 +134,16 @@ class QKData(with_metaclass(MetaQKData, AbstractDataBase)):
             self.barId += 1  # то переходим на следующий бар
             return True  # Будем заходить сюда еще
         # Новый бар
-        timeOpen = self.p.tz.localize(dt)  # Биржевое время открытия бара
-        timeNextClose = timeOpen + timedelta(minutes=self.interval*2)  # Биржевое время закрытия следующего бара
-        timeMarketNow = datetime.now(self.p.tz)  # Текущее биржевое время
-        if not self.lifeMode and timeNextClose > timeMarketNow:  # Если не в режиме получения новых баров, и следующий бар закроется позже текущего времени на бирже
+        dtMarketNextBarClose = dt + timedelta(minutes=self.interval*2)  # Биржевое время закрытия следующего бара
+        dtMarketNow = self.GetQUIKDateTimeNow()  # Текущее биржевое время из QUIK
+        if not self.liveMode and dtMarketNextBarClose > dtMarketNow:  # Если не в режиме получения новых баров, и следующий бар закроется позже текущего времени на бирже
             self.put_notification(self.LIVE)  # Уведомляем о получении новых баров
-            self.lifeMode = True  # Переходим в режим получения новых баров
+            self.liveMode = True  # Переходим в режим получения новых баров
         # Бывает ситуация, когда QUIK несколько минут не передает новые бары. Затем передает все пропущенные
         # Чтобы не совершать сделки на истории, меняем режим торгов на историю до прихода нового бара
-        elif self.lifeMode and timeNextClose <= timeMarketNow:  # Если в режиме получения новых баров, и следующий бар закроется до текущего времени на бирже
+        elif self.liveMode and dtMarketNextBarClose <= dtMarketNow:  # Если в режиме получения новых баров, и следующий бар закроется до текущего времени на бирже
             self.put_notification(self.DELAYED)  # Отправляем уведомление об отправке исторических (не новых) баров
-            self.lifeMode = False  # Переходим в режим получения истории
+            self.liveMode = False  # Переходим в режим получения истории
         self.jsonBar = None  # Сбрасываем текущий бар
         return True  # Будем заходить еще
 
@@ -150,6 +153,12 @@ class QKData(with_metaclass(MetaQKData, AbstractDataBase)):
             self.put_notification(self.DISCONNECTED)  # Отправляем уведомление об окончании получения новых баров
             self.store.qpProvider.UnsubscribeFromCandles(self.classCode, self.secCode, self.interval)  # Отменяем подписку на новые бары
         self.store.DataCls = None  # Удаляем класс данных в хранилище
+
+    def GetQUIKDateTimeNow(self):
+        """Текущая дата и время МСК в QUIK"""
+        d = self.store.qpProvider.GetInfoParam('TRADEDATE')['data']  # Дата на сервере в виде строки dd.mm.yyyy
+        t = self.store.qpProvider.GetInfoParam('SERVERTIME')['data']  # Время на сервере в виде строки hh:mi:ss
+        return datetime.strptime(f'{d} {t}', '%d.%m.%Y %H:%M:%S')  # Переводим строки в дату и время и возвращаем их
 
     def OnNewCandle(self, data):
         """Обработчик события прихода нового бара"""
