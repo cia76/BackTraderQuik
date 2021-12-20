@@ -96,7 +96,10 @@ class QKStore(with_metaclass(MetaSingleton, object)):
         """Параметры тикера из кэша / по запросу"""
         si = [securityInfo for securityInfo in self.securityInfoList if securityInfo['class_code'] == ClassCode and securityInfo['sec_code'] == SecCode]  # Ищем в кэше параметры тикера
         if len(si) == 0:  # Если параметры тикера не найдены в кэше
-            si = self.qpProvider.GetSecurityInfo(ClassCode, SecCode)['data']  # то делаем запрос параметров тикера
+            si = self.qpProvider.GetSecurityInfo(ClassCode, SecCode)  # то делаем запрос параметров тикера
+            if 'data' not in si:  # Если ответ не пришел (возникла ошибка). Например, для опциона
+                print(f'Информация о {ClassCode}.{SecCode} не найдена')
+                return None  # то выходим, дальше не продолжаем
             self.securityInfoList.append(si)  # Добавляем полученные параметры тикера в кэш
             return si  # Возвращаем их
         else:  # Если параметры тикера найдены в кэше
@@ -104,12 +107,18 @@ class QKStore(with_metaclass(MetaSingleton, object)):
 
     def SizeToLots(self, ClassCode, SecCode, Size: int):
         """Из штук в лоты"""
-        securityLot = int(self.GetSecurityInfo(ClassCode, SecCode)['lot_size'])  # Размер лота тикера
+        si = self.GetSecurityInfo(ClassCode, SecCode)  # Получаем параметры тикера (lot_size)
+        if si is None:  # Если тикер не найден
+            return Size  # то кол-во не изменяется
+        securityLot = int(si['lot_size'])  # Размер лота тикера
         return int(Size / securityLot) if securityLot > 0 else Size  # Если задан лот, то переводим
 
     def LotsToSize(self, ClassCode, SecCode, Lots: int):
         """Из лотов в штуки"""
-        securityLot = int(self.GetSecurityInfo(ClassCode, SecCode)['lot_size'])  # Размер лота тикера
+        si = self.GetSecurityInfo(ClassCode, SecCode)  # Получаем параметры тикера (lot_size)
+        if si is None:  # Если тикер не найден
+            return Lots  # то лот не изменяется
+        securityLot = int(si['lot_size'])  # Размер лота тикера
         return Lots * securityLot if securityLot > 0 else Lots  # Если задан лот, то переводим
 
     def BTToQKPrice(self, ClassCode, SecCode, Price: float):
@@ -117,7 +126,10 @@ class QKStore(with_metaclass(MetaSingleton, object)):
         if ClassCode == 'TQOB':  # Для рынка облигаций
             return Price / 10  # цену делим на 10
         if ClassCode == 'SPBFUT':  # Для рынка фьючерсов
-            securityLot = int(self.GetSecurityInfo(ClassCode, SecCode)['lot_size'])  # Размер лота тикера
+            si = self.GetSecurityInfo(ClassCode, SecCode)  # Получаем параметры тикера (lot_size)
+            if si is None:  # Если тикер не найден
+                return Price  # то цена не изменяется
+            securityLot = int(si['lot_size'])  # Размер лота тикера
             if securityLot > 0:  # Если лот задан
                 return Price * securityLot  # то цену умножаем на лот
         return Price  # В остальных случаях цена не изменяется
@@ -127,7 +139,10 @@ class QKStore(with_metaclass(MetaSingleton, object)):
         if ClassCode == 'TQOB':  # Для рынка облигаций
             return Price * 10  # цену умножаем на 10
         if ClassCode == 'SPBFUT':  # Для рынка фьючерсов
-            securityLot = int(self.GetSecurityInfo(ClassCode, SecCode)['lot_size'])  # Размер лота тикера
+            si = self.GetSecurityInfo(ClassCode, SecCode)  # Получаем параметры тикера (lot_size)
+            if si is None:  # Если тикер не найден
+                return Price  # то цена не изменяется
+            securityLot = int(si['lot_size'])  # Размер лота тикера
             if securityLot > 0:  # Если лот задан
                 return Price / securityLot  # то цену делим на лот
         return Price  # В остальных случаях цена не изменяется
@@ -236,14 +251,18 @@ class QKStore(with_metaclass(MetaSingleton, object)):
         size = self.SizeToLots(classCode, secCode, size)  # Размер позиции в лотах
         if price is None:  # Если цена не указана для рыночных заявок
             price = 0.00  # Цена рыночной заявки должна быть нулевой (кроме фьючерсов)
+        si = self.GetSecurityInfo(classCode, secCode)  # Получаем параметры тикера (min_price_step, scale)
+        if si is None:  # Если тикер не найден
+            print(f'Постановка заявки по тикеру {classCode}.{secCode} отменена')
+            return None  # то цена не изменяется
         if order.exectype == Order.Market:  # Для рыночных заявок
             if classCode == 'SPBFUT':  # Для рынка фьючерсов
                 lastPrice = float(self.qpProvider.GetParamEx(classCode, secCode, 'LAST')['data']['param_value'])  # Последняя цена сделки
-                minPriceStep = self.GetSecurityInfo(classCode, secCode)['min_price_step']  # Минимальный шаг цены
+                minPriceStep = si['min_price_step']  # Минимальный шаг цены
                 price = lastPrice + 10 * minPriceStep if IsBuy else lastPrice - 10 * minPriceStep  # Наихудшая цена (на 10 шагов хуже последней цены). Все равно, заявка исполнится по рыночной цене
         else:  # Для остальных заявок
             price = self.BTToQKPrice(classCode, secCode, price)  # Переводим цену из BackTrader в QUIK
-        scale = int(self.GetSecurityInfo(classCode, secCode)['scale'])  # Кол-во значащих цифр после запятой
+        scale = int(si['scale'])  # Кол-во значащих цифр после запятой
         price = round(price, scale)  # Округляем цену до кол-ва значащих цифр
         if price.is_integer():  # Целое значение цены мы должны отправлять без десятичных знаков
             price = int(price)  # поэтому, приводим такую цену к целому числу
@@ -259,7 +278,7 @@ class QKStore(with_metaclass(MetaSingleton, object)):
         if order.exectype in [Order.Stop, Order.StopLimit]:  # Для стоп заявок
             transaction['ACTION'] = 'NEW_STOP_ORDER'  # Новая стоп заявка
             transaction['STOPPRICE'] = str(price)  # Стоп цена срабатывания
-            slippage = float(self.GetSecurityInfo(classCode, secCode)['min_price_step']) * self.StopSteps  # Размер проскальзывания в деньгах
+            slippage = float(si['min_price_step']) * self.StopSteps  # Размер проскальзывания в деньгах
             if slippage.is_integer():  # Целое значение проскальзывания мы должны отправлять без десятичных знаков
                 slippage = int(slippage)  # поэтому, приводим такое проскальзывание к целому числу
             if plimit is not None:  # Если задана лимитная цена исполнения
