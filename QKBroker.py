@@ -120,14 +120,12 @@ class QKBroker(with_metaclass(MetaQKBroker, BrokerBase)):
         transId = int(qkTransReply['trans_id'])  # Номер транзакции заявки
         if transId == 0:  # Заявки, выставленные не из автоторговли / только что (с нулевыми номерами транзакции)
             return  # не обрабатываем, пропускаем
-
         orderNum = int(qkTransReply['order_num'])  # Номер заявки на бирже
         try:  # Могут приходить другие заявки, не выставленные в автоторговле
             order: Order = self.store.orders[transId]  # Ищем заявку по номеру транзакции
         except KeyError:  # При ошибке
             print(f'Заявка {orderNum} на бирже с номером транзакции {transId} не найдена')
             return  # не обрабатываем, пропускаем
-
         self.store.orderNums[transId] = orderNum  # Сохраняем номер заявки на бирже
         # TODO Есть поле flags, но оно не документировано. Лучше вместо текстового результата транзакции разбирать по нему
         resultMsg = qkTransReply['result_msg']  # По результату исполнения транзакции (очень плохое решение)
@@ -136,12 +134,12 @@ class QKBroker(with_metaclass(MetaQKBroker, BrokerBase)):
             order.accept()  # Переводим заявку в статус Order.Accepted (регистрация новой заявки)
             self.notifs.append(order.clone())  # Уведомляем брокера о регистрации новой заявки
         elif 'снята' in resultMsg:  # Если пришел ответ по отмене существующей заявки
-            try:  # TODO Очень редко возникает ошибка:
-                # order.py, line 487, in cancel
-                # self.executed.dt = self.data.datetime[0]
-                # linebuffer.py, line 163, in __getitem__
-                # return self.array[self.idx + ago]
-                # IndexError: array index out of range
+            try:  # TODO В BT очень редко при order.cancel() возникает ошибка:
+                #    order.py, line 487, in cancel
+                #    self.executed.dt = self.data.datetime[0]
+                #    linebuffer.py, line 163, in __getitem__
+                #    return self.array[self.idx + ago]
+                #    IndexError: array index out of range
                 order.cancel()  # Переводим заявку в статус Order.Canceled (отмена существующей заявки)
             except (KeyError, IndexError):  # При ошибке
                 order.status = Order.Canceled  # все равно ставим статус заявки Order.Canceled
@@ -151,20 +149,27 @@ class QKBroker(with_metaclass(MetaQKBroker, BrokerBase)):
             if status == 4 and 'Не найдена заявка' in resultMsg or \
                status == 5 and 'не можете снять' in resultMsg:   # Не найдена заявка для удаления / Вы не можете снять данную заявку
                 return  # то заявку не отменяем, выходим, дальше не продолжаем
-
-            try:  # TODO Очень редко возникает ошибка:
-                # order.py", line 480, in reject
-                # self.executed.dt = self.data.datetime[0]
-                # linebuffer.py", line 163, in __getitem__
-                # return self.array[self.idx + ago]
-                # IndexError: array index out of range
+            try:  # TODO В BT очень редко при order.reject() возникает ошибка:
+                #    order.py", line 480, in reject
+                #    self.executed.dt = self.data.datetime[0]
+                #    linebuffer.py", line 163, in __getitem__
+                #    return self.array[self.idx + ago]
+                #    IndexError: array index out of range
                 order.reject()  # Переводим заявку в статус Order.Reject
             except (KeyError, IndexError):  # При ошибке
                 order.status = Order.Rejected  # все равно ставим статус заявки Order.Rejected
             self.notifs.append(order.clone())  # Уведомляем брокера об ошибке заявки
             self.store.OCOCheck(order)  # Проверяем связанные заявки
         elif status == 6:  # Транзакция не прошла проверку лимитов сервера QUIK
-            order.margin()  # Переводим заявку в статус Order.Margin
+            try:  # TODO В BT очень редко при order.margin() возникает ошибка:
+                #    order.py", line 492, in margin
+                #    self.executed.dt = self.data.datetime[0]
+                #    linebuffer.py", line 163, in __getitem__
+                #    return self.array[self.idx + ago]
+                #    IndexError: array index out of range
+                order.margin()  # Переводим заявку в статус Order.Margin
+            except (KeyError, IndexError):  # При ошибке
+                order.status = Order.Margin  # все равно ставим статус заявки Order.Margin
             self.notifs.append(order.clone())  # Уведомляем брокера о недостатке средств
             self.store.OCOCheck(order)  # Проверяем связанные заявки
 

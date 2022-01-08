@@ -240,9 +240,9 @@ class QKStore(with_metaclass(MetaSingleton, object)):
         return posValue  # Стоимость позиций по счету
 
     def PlaceOrder(self, ClientCode, TradeAccountId, owner, data, size, price=None, plimit=None, exectype=None, valid=None, oco=None, CommInfo=None, IsBuy=True, **kwargs):
-        # TODO: Организовать постановку/снятие 3-х заявок (Bracket Orders) через buy_bracket и sell_bracket
-        # TODO: Организовать постановку/снятие любой цепочки заявок через параметры 'parent' и 'transmit'
         # TODO: По статье https://backtrader.com/docu/order-creation-execution/bracket/bracket/
+        #  Организовать постановку/снятие 3-х заявок (Bracket Orders) через buy_bracket и sell_bracket
+        #  Организовать постановку/снятие любой цепочки заявок через параметры 'parent' и 'transmit'
         order = BuyOrder(owner=owner, data=data, size=size, price=price, pricelimit=plimit, exectype=exectype, oco=oco) if IsBuy \
             else SellOrder(owner=owner, data=data, size=size, price=price, pricelimit=plimit, exectype=exectype, oco=oco)  # Заявка на покупку/продажу
         order.addinfo(**kwargs)  # Передаем все дополнительные параметры
@@ -303,8 +303,11 @@ class QKStore(with_metaclass(MetaSingleton, object)):
             self.ocos[order.ref] = oco.ref  # то заносим в список родительских заявок
         response = self.qpProvider.SendTransaction(transaction)  # Отправляем транзакцию на рынок
         order.submit(self)  # Переводим заявку в статус Order.Submitted
+        # TODO Последний бар сессии или последний дневной бар приходит к нам на первом подключении к бирже. При этом подключении биржа еще не работает.
+        #  На этом баре может быть сигнал. Он отправляется на неработающую биржу и получает отбой.
+        #  Надо, чтобы такой бар отправлялся на открытии биржи. Время открытия у нас проставлено в данных.
         if response['cmd'] == 'lua_transaction_error':  # Если возникла ошибка при постановке заявки на уровне QUIK
-            print(f'{response["data"]["CLASSCODE"]}.{response["data"]["SECCODE"]}{response["lua_error"]}')  # то заявка не отправляется на биржу, выводим сообщение об ошибке
+            print(f'Ошибка отправки заявки в QUIK {response["data"]["CLASSCODE"]}.{response["data"]["SECCODE"]}{response["lua_error"]}')  # то заявка не отправляется на биржу, выводим сообщение об ошибке
             order.reject()  # Переводим заявку в статус Order.Reject
         self.orders[order.ref] = order  # Сохраняем в списке заявок
         return order  # Возвращаем заявку
