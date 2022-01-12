@@ -145,14 +145,17 @@ class QKBroker(with_metaclass(MetaQKBroker, BrokerBase)):
                 order.status = Order.Canceled  # все равно ставим статус заявки Order.Canceled
             self.notifs.append(order.clone())  # Уведомляем брокера об отмене существующей заявки
             self.store.OCOCheck(order)  # Проверяем связанные заявки
-        elif status in (2, 4, 5, 10, 11, 12, 13, 14, 16):  # Транзакция не выполнена (ошибка заявки)
+        elif status in (2, 4, 5, 10, 11, 12, 13, 14, 16):  # Транзакция не выполнена (ошибка заявки):
+            # - Не найдена заявка для удаления
+            # - Вы не можете снять данную заявку
+            # - Превышен лимит отправки транзакций для данного логина
             if status == 4 and 'Не найдена заявка' in resultMsg or \
-               status == 5 and 'не можете снять' in resultMsg:   # Не найдена заявка для удаления / Вы не можете снять данную заявку
+               status == 5 and 'не можете снять' in resultMsg or 'Превышен лимит' in resultMsg:
                 return  # то заявку не отменяем, выходим, дальше не продолжаем
             try:  # TODO В BT очень редко при order.reject() возникает ошибка:
-                #    order.py", line 480, in reject
+                #    order.py, line 480, in reject
                 #    self.executed.dt = self.data.datetime[0]
-                #    linebuffer.py", line 163, in __getitem__
+                #    linebuffer.py, line 163, in __getitem__
                 #    return self.array[self.idx + ago]
                 #    IndexError: array index out of range
                 order.reject()  # Переводим заявку в статус Order.Reject
@@ -162,9 +165,9 @@ class QKBroker(with_metaclass(MetaQKBroker, BrokerBase)):
             self.store.OCOCheck(order)  # Проверяем связанные заявки
         elif status == 6:  # Транзакция не прошла проверку лимитов сервера QUIK
             try:  # TODO В BT очень редко при order.margin() возникает ошибка:
-                #    order.py", line 492, in margin
+                #    order.py, line 492, in margin
                 #    self.executed.dt = self.data.datetime[0]
-                #    linebuffer.py", line 163, in __getitem__
+                #    linebuffer.py, line 163, in __getitem__
                 #    return self.array[self.idx + ago]
                 #    IndexError: array index out of range
                 order.margin()  # Переводим заявку в статус Order.Margin
@@ -212,9 +215,9 @@ class QKBroker(with_metaclass(MetaQKBroker, BrokerBase)):
             size *= -1  # то кол-во ставим отрицательным
         price = self.store.QKToBTPrice(classCode, secCode, float(qkTrade['price']))  # Переводим цену исполнения за лот в цену исполнения за штуку
         try:  # TODO Очень редко возникает ошибка:
-            # linebuffer.py, line 163, in __getitem__
-            # return self.array[self.idx + ago]
-            # IndexError: array index out of range
+            #    linebuffer.py, line 163, in __getitem__
+            #    return self.array[self.idx + ago]
+            #    IndexError: array index out of range
             dt = order.data.datetime[0]  # Дата и время исполнения заявки. Последняя известная
         except (KeyError, IndexError):  # При ошибке
             dt = datetime.now(QKStore.MarketTimeZone)  # Берем текущее время на рынке
