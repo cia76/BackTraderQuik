@@ -30,13 +30,13 @@ class QKStore(with_metaclass(MetaSingleton, object)):
         ('Host', '127.0.0.1'),  # Адрес/IP компьютера с QUIK
         ('RequestsPort', 34130),  # Номер порта для запросов и ответов
         ('CallbacksPort', 34131),  # Номер порта для получения событий
+        ('StopSteps', 10),  # Размер в минимальных шагах цены инструмента для исполнения стоп заявок
     )
 
     BrokerCls = None  # Класс брокера будет задан из брокера
     DataCls = None  # Класс данных будет задан из данных
 
     MarketTimeZone = timezone('Europe/Moscow')  # Биржа работает по московскому времени
-    StopSteps = 10  # Размер в минимальных шагах цены инструмента для исполнения стоп заявок
 
     @classmethod
     def getdata(cls, *args, **kwargs):
@@ -255,11 +255,13 @@ class QKStore(with_metaclass(MetaSingleton, object)):
         if si is None:  # Если тикер не найден
             print(f'Постановка заявки по тикеру {classCode}.{secCode} отменена')
             return None  # то цена не изменяется
+        slippage = float(si['min_price_step']) * self.p.StopSteps  # Размер проскальзывания в деньгах
+        if slippage.is_integer():  # Целое значение проскальзывания мы должны отправлять без десятичных знаков
+            slippage = int(slippage)  # поэтому, приводим такое проскальзывание к целому числу
         if order.exectype == Order.Market:  # Для рыночных заявок
             if classCode == 'SPBFUT':  # Для рынка фьючерсов
                 lastPrice = float(self.qpProvider.GetParamEx(classCode, secCode, 'LAST')['data']['param_value'])  # Последняя цена сделки
-                minPriceStep = si['min_price_step']  # Минимальный шаг цены
-                price = lastPrice + 10 * minPriceStep if IsBuy else lastPrice - 10 * minPriceStep  # Наихудшая цена (на 10 шагов хуже последней цены). Все равно, заявка исполнится по рыночной цене
+                price = lastPrice + slippage if IsBuy else lastPrice - slippage  # Из документации QUIK: При покупке/продаже фьючерсов по рынку нужно ставить цену хуже последней сделки
         else:  # Для остальных заявок
             price = self.BTToQKPrice(classCode, secCode, price)  # Переводим цену из BackTrader в QUIK
         scale = int(si['scale'])  # Кол-во значащих цифр после запятой
@@ -278,9 +280,6 @@ class QKStore(with_metaclass(MetaSingleton, object)):
         if order.exectype in [Order.Stop, Order.StopLimit]:  # Для стоп заявок
             transaction['ACTION'] = 'NEW_STOP_ORDER'  # Новая стоп заявка
             transaction['STOPPRICE'] = str(price)  # Стоп цена срабатывания
-            slippage = float(si['min_price_step']) * self.StopSteps  # Размер проскальзывания в деньгах
-            if slippage.is_integer():  # Целое значение проскальзывания мы должны отправлять без десятичных знаков
-                slippage = int(slippage)  # поэтому, приводим такое проскальзывание к целому числу
             if plimit is not None:  # Если задана лимитная цена исполнения
                 limitPrice = round(plimit, scale)  # то ее и берем, округлив цену до кол-ва значащих цифр
             elif IsBuy:  # Если цена не задана, и покупаем
@@ -303,9 +302,6 @@ class QKStore(with_metaclass(MetaSingleton, object)):
             self.ocos[order.ref] = oco.ref  # то заносим в список родительских заявок
         response = self.qpProvider.SendTransaction(transaction)  # Отправляем транзакцию на рынок
         order.submit(self)  # Переводим заявку в статус Order.Submitted
-        # TODO Последний бар сессии или последний дневной бар приходит к нам на первом подключении к бирже. При этом подключении биржа еще не работает.
-        #  На этом баре может быть сигнал. Он отправляется на неработающую биржу и получает отбой.
-        #  Надо, чтобы такой бар отправлялся на открытии биржи. Время открытия у нас проставлено в данных.
         if response['cmd'] == 'lua_transaction_error':  # Если возникла ошибка при постановке заявки на уровне QUIK
             print(f'Ошибка отправки заявки в QUIK {response["data"]["CLASSCODE"]}.{response["data"]["SECCODE"]}{response["lua_error"]}')  # то заявка не отправляется на биржу, выводим сообщение об ошибке
             order.reject()  # Переводим заявку в статус Order.Reject
@@ -352,7 +348,7 @@ class QKStore(with_metaclass(MetaSingleton, object)):
     # QKBroker: Обработка событий подключения к QUIK / отключения от QUIK
 
     def OnConnected(self, data):
-        dt = datetime.now(QKStore.MarketTimeZone)  # Берем текущее время на рынке
+        dt = datetime.now(QKStore.MarketTimeZone)  # Берем текущее время на рынке из локального
         print(f'{dt.strftime("%d.%m.%Y %H:%M")}, QUIK Connected')
         self.isConnected = True  # QUIK подключен к серверу брокера
         print(f'Проверка подписки тикеров ({len(self.subscribedSymbols)})')
@@ -370,7 +366,7 @@ class QKStore(with_metaclass(MetaSingleton, object)):
     def OnDisconnected(self, data):
         if not self.isConnected:  # Если QUIK отключен от сервера брокера
             return  # то не нужно дублировать сообщение, выходим, дальше не продолжаем
-        dt = datetime.now(QKStore.MarketTimeZone)  # Берем текущее время на рынке
+        dt = datetime.now(QKStore.MarketTimeZone)  # Берем текущее время на рынке из локального
         print(f'{dt.strftime("%d.%m.%Y %H:%M")}, QUIK Disconnected')
         self.isConnected = False  # QUIK отключен от сервера брокера
 
