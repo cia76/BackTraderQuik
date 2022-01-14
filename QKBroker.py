@@ -220,7 +220,7 @@ class QKBroker(with_metaclass(MetaQKBroker, BrokerBase)):
             #    IndexError: array index out of range
             dt = order.data.datetime[0]  # Дата и время исполнения заявки. Последняя известная
         except (KeyError, IndexError):  # При ошибке
-            dt = datetime.now(QKStore.MarketTimeZone)  # Берем текущее время на рынке
+            dt = datetime.now(QKStore.MarketTimeZone)  # Берем текущее время на рынке из локального
         pos = self.getposition(order.data, clone=False)  # Получаем позицию по тикеру или нулевую позицию если тикера в списке позиций нет
         psize, pprice, opened, closed = pos.update(size, price)  # Обновляем размер/цену позиции на размер/цену сделки
         order.execute(dt, size, price, closed, 0, 0, opened, 0, 0, 0, 0, psize, pprice)  # Исполняем заявку в BackTrader
