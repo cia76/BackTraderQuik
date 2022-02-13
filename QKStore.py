@@ -36,7 +36,7 @@ class QKStore(with_metaclass(MetaSingleton, object)):
     BrokerCls = None  # Класс брокера будет задан из брокера
     DataCls = None  # Класс данных будет задан из данных
 
-    MarketTimeZone = timezone('Europe/Moscow')  # Биржа работает по московскому времени
+    MarketTimeZone = timezone('Europe/Moscow')  # Рынок работает по московскому времени
 
     @classmethod
     def getdata(cls, *args, **kwargs):
@@ -58,10 +58,11 @@ class QKStore(with_metaclass(MetaSingleton, object)):
         self.securityInfoList = []  # Кэш параметров тикеров
         self.newBars = []  # Новые бары по подписке из QUIK
         self.positions = collections.defaultdict(Position)  # Список позиций
-        self.orders = collections.OrderedDict()  # Список заявок
+        self.orders = collections.OrderedDict()  # Список заявок, отправленных на рынок
         self.newTransId = 1  # Следующий внутренний номер транзакции заявки (задается пользователем)
-        self.orderNums = {}  # Словарь заявок на бирже. Индекс - номер транзакции, значение - номер заявки на бирже
-        self.ocos = {}  # Список связанных заявок
+        self.orderNums = {}  # Словарь заявок на рынке. Индекс - номер транзакции, значение - номер заявки на рынке
+        self.pcs = collections.defaultdict(collections.deque)  # Очередь всех родительских/дочерних заявок (Parent - Children)
+        self.ocos = {}  # Список связанных заявок (One Cancel Others)
 
     def start(self):
         self.qpProvider.OnNewCandle = self.OnNewCandle  # Обработчик новых баров по подписке из QUIK
@@ -239,87 +240,112 @@ class QKStore(with_metaclass(MetaSingleton, object)):
             posValue += pos.size * lastPrice  # Добавляем стоимость позиции
         return posValue  # Стоимость позиций по счету
 
-    def PlaceOrder(self, ClientCode, TradeAccountId, owner, data, size, price=None, plimit=None, exectype=None, valid=None, oco=None, CommInfo=None, IsBuy=True, **kwargs):
-        # TODO: По статье https://backtrader.com/docu/order-creation-execution/bracket/bracket/
-        #  Организовать постановку/снятие 3-х заявок (Bracket Orders) через buy_bracket и sell_bracket
-        #  Организовать постановку/снятие любой цепочки заявок через параметры 'parent' и 'transmit'
-        order = BuyOrder(owner=owner, data=data, size=size, price=price, pricelimit=plimit, exectype=exectype, oco=oco) if IsBuy \
-            else SellOrder(owner=owner, data=data, size=size, price=price, pricelimit=plimit, exectype=exectype, oco=oco)  # Заявка на покупку/продажу
-        order.addinfo(**kwargs)  # Передаем все дополнительные параметры
-        order.addcomminfo(CommInfo)  # По тикеру выставляем комиссии в заявку. Нужно для исполнения заявки в BackTrader
+    def CreateOrder(self, owner, data, size, price=None, plimit=None, exectype=None, valid=None, oco=None, parent=None, transmit=True, IsBuy=True, **kwargs):
+        """
+        Создание заявки
+        Привязка параметров счета и тикера
+        Обработка связанных и родительской/дочерних заявок
+        """
+        order = BuyOrder(owner=owner, data=data, size=size, price=price, pricelimit=plimit, exectype=exectype, valid=valid, oco=oco, parent=parent, transmit=transmit) if IsBuy \
+            else SellOrder(owner=owner, data=data, size=size, price=price, pricelimit=plimit, exectype=exectype, valid=valid, oco=oco, parent=parent, transmit=transmit)  # Заявка на покупку/продажу
+        order.ref = self.newTransId  # Ставим номер транзакции в заявку
+        self.newTransId += 1  # Увеличиваем номер транзакции для будущих заявок
+        order.addinfo(**kwargs)  # Передаем в заявку все дополнительные свойства из брокера, в т.ч. ClientCode и TradeAccountId
+        order.addcomminfo(self.BrokerCls.getcommissioninfo(data))  # По тикеру выставляем комиссии в заявку. Нужно для исполнения заявки в BackTrader
         classCode, secCode = self.DataNameToClassSecCode(data._dataname)  # Из названия тикера получаем код площадки и тикера
-        size = self.SizeToLots(classCode, secCode, size)  # Размер позиции в лотах
-        if price is None:  # Если цена не указана для рыночных заявок
-            price = 0.00  # Цена рыночной заявки должна быть нулевой (кроме фьючерсов)
+        order.addinfo(ClassCode=classCode, SecCode=secCode)  # Код площадки ClassCode и тикера SecCode
         si = self.GetSecurityInfo(classCode, secCode)  # Получаем параметры тикера (min_price_step, scale)
         if si is None:  # Если тикер не найден
-            print(f'Постановка заявки по тикеру {classCode}.{secCode} отменена')
-            return None  # то цена не изменяется
-        slippage = float(si['min_price_step']) * self.p.StopSteps  # Размер проскальзывания в деньгах
+            print(f'Постановка заявки {order.ref} по тикеру {classCode}.{secCode} отменена. Тикер не найден')
+            order.reject()  # то отменяем заявку
+            return order  # Возвращаем отмененную заявку
+        order.addinfo(Slippage=float(si['min_price_step']) * self.p.StopSteps)  # Размер проскальзывания в деньгах Slippage
+        order.addinfo(Scale=int(si['scale']))  # Кол-во значащих цифр после запятой Scale
+        if oco is not None:  # Если есть связанная заявка
+            self.ocos[order.ref] = oco.ref  # то заносим в список связанных заявок
+        if not transmit or parent is not None:  # Для родительской/дочерних заявок
+            parentRef = getattr(order.parent, 'ref', order.ref)  # Номер транзакции родительской заявки или номер заявки, если родительской заявки нет
+            if order.ref != parentRef and parentRef not in self.pcs:  # Если есть родительская заявка, но она не найдена в очереди родительских/дочерних заявок
+                print(f'Постановка заявки {order.ref} по тикеру {classCode}.{secCode} отменена. Родительская заявка не найдена')
+                order.reject()  # то отменяем заявку
+                return order  # Возвращаем отмененную заявку
+            pcs = self.pcs[parentRef]  # В очередь к родительской заявке
+            pcs.append(order)  # добавляем заявку (родительскую или дочернюю)
+        if parent is None and transmit:  # Для НЕ родительских/дочерних заявок
+            return self.PlaceOrder(order)  # Отправляем заявку на рынок
+        elif transmit:  # Если последняя заявка в цепочке родительской/дочерних заявок (transmit=True)
+            self.BrokerCls.notifs.append(order.clone())  # Удедомляем брокера о создании новой заявки
+            return self.PlaceOrder(order.parent)  # Отправляем родительскую заявку на рынок
+        # Если не последняя заявка в цепочке родительской/дочерних заявок (transmit=False)
+        return order  # то возвращаем созданную заявку со статусом Created. На рынок ее пока не ставим
+
+    def PlaceOrder(self, order):
+        """Отправка заявки (транзакции) на рынок"""
+        classCode = order.info['ClassCode']  # Код площадки
+        secCode = order.info['SecCode']  # Код тикера
+        size = self.SizeToLots(classCode, secCode, order.size)  # Размер позиции в лотах
+        price = order.price  # Цена заявки
+        if price is None:  # Если цена не указана для рыночных заявок
+            price = 0.00  # Цена рыночной заявки должна быть нулевой (кроме фьючерсов)
+        slippage = order.info['Slippage']  # Размер проскальзывания в деньгах
         if slippage.is_integer():  # Целое значение проскальзывания мы должны отправлять без десятичных знаков
             slippage = int(slippage)  # поэтому, приводим такое проскальзывание к целому числу
         if order.exectype == Order.Market:  # Для рыночных заявок
             if classCode == 'SPBFUT':  # Для рынка фьючерсов
                 lastPrice = float(self.qpProvider.GetParamEx(classCode, secCode, 'LAST')['data']['param_value'])  # Последняя цена сделки
-                price = lastPrice + slippage if IsBuy else lastPrice - slippage  # Из документации QUIK: При покупке/продаже фьючерсов по рынку нужно ставить цену хуже последней сделки
+                price = lastPrice + slippage if order.isbuy() else lastPrice - slippage  # Из документации QUIK: При покупке/продаже фьючерсов по рынку нужно ставить цену хуже последней сделки
         else:  # Для остальных заявок
             price = self.BTToQKPrice(classCode, secCode, price)  # Переводим цену из BackTrader в QUIK
-        scale = int(si['scale'])  # Кол-во значащих цифр после запятой
+        scale = order.info['Scale']  # Кол-во значащих цифр после запятой
         price = round(price, scale)  # Округляем цену до кол-ва значащих цифр
         if price.is_integer():  # Целое значение цены мы должны отправлять без десятичных знаков
             price = int(price)  # поэтому, приводим такую цену к целому числу
         transaction = {  # Все значения должны передаваться в виде строк
             'TRANS_ID': str(self.newTransId),  # Номер транзакции задается клиентом
-            'CLIENT_CODE': ClientCode,  # Код клиента. Для фьючерсов его нет
-            'ACCOUNT': TradeAccountId,  # Счет
+            'CLIENT_CODE': order.info['ClientCode'],  # Код клиента. Для фьючерсов его нет
+            'ACCOUNT': order.info['TradeAccountId'],  # Счет
             'CLASSCODE': classCode,  # Код площадки
             'SECCODE': secCode,  # Код тикера
-            'OPERATION': 'B' if IsBuy else 'S',  # B = покупка, S = продажа
+            'OPERATION': 'B' if order.isbuy() else 'S',  # B = покупка, S = продажа
             'PRICE': str(price),  # Цена исполнения
             'QUANTITY': str(size)}  # Кол-во в лотах
         if order.exectype in [Order.Stop, Order.StopLimit]:  # Для стоп заявок
             transaction['ACTION'] = 'NEW_STOP_ORDER'  # Новая стоп заявка
             transaction['STOPPRICE'] = str(price)  # Стоп цена срабатывания
+            plimit = order.pricelimit  # Лимитная цена исполнения
             if plimit is not None:  # Если задана лимитная цена исполнения
                 limitPrice = round(plimit, scale)  # то ее и берем, округлив цену до кол-ва значащих цифр
-            elif IsBuy:  # Если цена не задана, и покупаем
+            elif order.isbuy():  # Если цена не задана, и покупаем
                 limitPrice = price + slippage  # то будем покупать по большей цене в размер проскальзывания
             else:  # Если цена не задана, и продаем
                 limitPrice = price - slippage  # то будем продавать по меньшей цене в размер проскальзывания
             transaction['PRICE'] = str(limitPrice)  # Лимитная цена исполнения
             expiryDate = 'GTC'  # По умолчанию будем держать заявку до отмены GTC = Good Till Cancelled
-            if valid in [Order.DAY, 0]:  # Если заявка поставлена на день
+            if order.valid in [Order.DAY, 0]:  # Если заявка поставлена на день
                 expiryDate = 'TODAY'  # то будем держать ее до окончания текущей торговой сессии
-            elif isinstance(valid, date):  # Если заявка поставлена до даты
-                expiryDate = valid.strftime('%Y%m%d')  # то будем держать ее до указанной даты
+            elif isinstance(order.valid, date):  # Если заявка поставлена до даты
+                expiryDate = order.valid.strftime('%Y%m%d')  # то будем держать ее до указанной даты
             transaction['EXPIRY_DATE'] = expiryDate  # Срок действия стоп заявки
         else:  # Для рыночных или лимитных заявок
             transaction['ACTION'] = 'NEW_ORDER'  # Новая рыночная или лимитная заявка
             transaction['TYPE'] = 'L' if order.exectype == Order.Limit else 'M'  # L = лимитная заявка (по умолчанию), M = рыночная заявка
-        order.ref = self.newTransId  # Ставим номер транзакции в заявку
-        self.newTransId += 1  # Увеличиваем номер транзакции для будущих заявок
-        if oco is not None:  # Если есть связанная заявка
-            self.ocos[order.ref] = oco.ref  # то заносим в список родительских заявок
         response = self.qpProvider.SendTransaction(transaction)  # Отправляем транзакцию на рынок
         order.submit(self)  # Переводим заявку в статус Order.Submitted
         if response['cmd'] == 'lua_transaction_error':  # Если возникла ошибка при постановке заявки на уровне QUIK
-            print(f'Ошибка отправки заявки в QUIK {response["data"]["CLASSCODE"]}.{response["data"]["SECCODE"]}{response["lua_error"]}')  # то заявка не отправляется на биржу, выводим сообщение об ошибке
+            print(f'Ошибка отправки заявки в QUIK {response["data"]["CLASSCODE"]}.{response["data"]["SECCODE"]} {response["lua_error"]}')  # то заявка не отправляется на рынок, выводим сообщение об ошибке
             order.reject()  # Переводим заявку в статус Order.Reject
-        self.orders[order.ref] = order  # Сохраняем в списке заявок
+        self.orders[order.ref] = order  # Сохраняем в списке заявок, отправленных на рынок
         return order  # Возвращаем заявку
 
     def CancelOrder(self, order):
         """Отмена заявки"""
         if not order.alive():  # Если заявка уже была завершена
             return  # то выходим, дальше не продолжаем
-
         if not self.orders.get(order.ref, False):  # Если заявка не найдена
             return  # то выходим, дальше не продолжаем
-
-        if order.ref not in self.orderNums:  # Если заявки нет в словаре заявок на бирже
+        if order.ref not in self.orderNums:  # Если заявки нет в словаре заявок на рынке
             return  # то выходим, дальше не продолжаем
-
-        orderNum = self.orderNums[order.ref]  # Номер заявки на бирже
+        orderNum = self.orderNums[order.ref]  # Номер заявки на рынке
         classCode, secCode = self.DataNameToClassSecCode(order.data._dataname)  # По названию тикера получаем код площадки и код тикера
         isStop = order.exectype in [Order.Stop, Order.StopLimit] and \
             isinstance(self.qpProvider.GetOrderByNumber(orderNum)['data'], int)  # Задана стоп заявка и лимитная заявка не выставлена
@@ -329,21 +355,34 @@ class QKStore(with_metaclass(MetaSingleton, object)):
             'SECCODE': secCode}  # Код тикера
         if isStop:  # Для стоп заявки
             transaction['ACTION'] = 'KILL_STOP_ORDER'  # Будем удалять стоп заявку
-            transaction['STOP_ORDER_KEY'] = str(orderNum)  # Номер стоп заявки на бирже
+            transaction['STOP_ORDER_KEY'] = str(orderNum)  # Номер стоп заявки на рынке
         else:  # Для лимитной заявки
             transaction['ACTION'] = 'KILL_ORDER'  # Будем удалять лимитную заявку
-            transaction['ORDER_KEY'] = str(orderNum)  # Номер заявки на бирже
+            transaction['ORDER_KEY'] = str(orderNum)  # Номер заявки на рынке
         self.qpProvider.SendTransaction(transaction)  # Отправляем транзакцию на рынок
         return order  # В список уведомлений ничего не добавляем. Ждем события OnTransReply
 
-    def OCOCheck(self, order):
-        """Проверка связанных заявок"""
-        for orderRef, ocoRef in self.ocos.items():  # Пробегаемся по списку родительских заявок
-            if ocoRef == order.ref:  # Если эта заявка для какой-то является родительской
-                self.CancelOrder(self.orders[orderRef])  # то удаляем ту заявку
-        if order.ref in self.ocos.keys():  # Если у этой заявки есть родительская заявка
-            ocoRef = self.ocos[order.ref]  # то получаем номер родительской заявки
-            self.CancelOrder(self.orders[ocoRef])  # и удаляем родительскую заявку
+    def OCOPCCheck(self, order):
+        """
+        Проверка связанных заявок
+        Проверка родительской/дочерних заявок
+        """
+        for orderRef, ocoRef in self.ocos.items():  # Пробегаемся по списку связанных заявок
+            if ocoRef == order.ref:  # Если в заявке номер эта заявка указана как связанная (по номеру транзакции)
+                self.CancelOrder(self.orders[orderRef])  # то отменяем заявку
+        if order.ref in self.ocos.keys():  # Если у этой заявки указана связанная заявка
+            ocoRef = self.ocos[order.ref]  # то получаем номер транзакции связанной заявки
+            self.CancelOrder(self.orders[ocoRef])  # отменяем связанную заявку
+
+        if order.parent is None and not order.transmit and order.status == Order.Completed:  # Если исполнена родительская заявка
+            pcs = self.pcs[order.ref]  # Получаем очередь родительской/дочерних заявок
+            for child in pcs[1:]:  # Пробегаемся по всем дочерним (кроме первой) заявкам
+                self.PlaceOrder(child)  # Отправляем дочернюю заявку на рынок
+        elif order.parent is not None:  # Если исполнена/отменена дочерняя заявка
+            pcs = self.pcs[order.parent.ref]  # Получаем очередь родительской/дочерних заявок
+            for child in pcs[1:]:  # Пробегаемся по всем дочерним (кроме первой) заявкам
+                if child.ref != order.ref:
+                    self.CancelOrder(child)  # Отменяем дочернюю заявку
 
     # QKBroker: Обработка событий подключения к QUIK / отключения от QUIK
 
