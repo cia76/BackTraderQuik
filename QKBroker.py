@@ -79,17 +79,15 @@ class QKBroker(with_metaclass(MetaQKBroker, BrokerBase)):
             pos = pos.clone()  # то создаем копию
         return pos  # Возвращаем позицию или ее копию
 
-    def buy(self, owner, data, size, price=None, plimit=None, exectype=None, valid=None, tradeid=0, oco=None, trailamount=None, trailpercent=None, **kwargs):
+    def buy(self, owner, data, size, price=None, plimit=None, exectype=None, valid=None, tradeid=0, oco=None, trailamount=None, trailpercent=None, parent=None, transmit=True, **kwargs):
         """Заявка на покупку"""
-        commInfo = self.getcommissioninfo(data)  # По тикеру выставляем комиссии в заявку. Нужно для исполнения заявки в BackTrader
-        order = self.store.PlaceOrder(self.p.ClientCode, self.p.TradeAccountId, owner, data, size, price, plimit, exectype, valid, oco, commInfo, True, **kwargs)
+        order = self.store.CreateOrder(owner, data, size, price, plimit, exectype, valid, oco, True, ClientCode=self.p.ClientCode, TradeAccountId=self.p.TradeAccountId, **kwargs)
         self.notifs.append(order.clone())  # Удедомляем брокера об отправке новой заявки на рынок
         return order
 
-    def sell(self, owner, data, size, price=None, plimit=None, exectype=None, valid=None, tradeid=0, oco=None, trailamount=None, trailpercent=None, **kwargs):
+    def sell(self, owner, data, size, price=None, plimit=None, exectype=None, valid=None, tradeid=0, oco=None, trailamount=None, trailpercent=None, parent=None, transmit=True, **kwargs):
         """Заявка на продажу"""
-        commInfo = self.getcommissioninfo(data)  # По тикеру выставляем комиссии в заявку. Нужно для исполнения заявки в BackTrader
-        order = self.store.PlaceOrder(self.p.ClientCode, self.p.TradeAccountId, owner, data, size, price, plimit, exectype, valid, oco, commInfo, False, **kwargs)
+        order = self.store.CreateOrder(owner, data, size, price, plimit, exectype, valid, oco, False, ClientCode=self.p.ClientCode, TradeAccountId=self.p.TradeAccountId, **kwargs)
         self.notifs.append(order.clone())  # Удедомляем брокера об отправке новой заявки на рынок
         return order
 
@@ -144,7 +142,7 @@ class QKBroker(with_metaclass(MetaQKBroker, BrokerBase)):
             except (KeyError, IndexError):  # При ошибке
                 order.status = Order.Canceled  # все равно ставим статус заявки Order.Canceled
             self.notifs.append(order.clone())  # Уведомляем брокера об отмене существующей заявки
-            self.store.OCOCheck(order)  # Проверяем связанные заявки
+            self.store.OCOPCCheck(order)  # Проверяем связанные и родительскую/дочерние заявки (Canceled)
         elif status in (2, 4, 5, 10, 11, 12, 13, 14, 16):  # Транзакция не выполнена (ошибка заявки):
             # - Не найдена заявка для удаления
             # - Вы не можете снять данную заявку
@@ -162,7 +160,7 @@ class QKBroker(with_metaclass(MetaQKBroker, BrokerBase)):
             except (KeyError, IndexError):  # При ошибке
                 order.status = Order.Rejected  # все равно ставим статус заявки Order.Rejected
             self.notifs.append(order.clone())  # Уведомляем брокера об ошибке заявки
-            self.store.OCOCheck(order)  # Проверяем связанные заявки
+            self.store.OCOPCCheck(order)  # Проверяем связанные и родительскую/дочерние заявки (Rejected)
         elif status == 6:  # Транзакция не прошла проверку лимитов сервера QUIK
             try:  # TODO В BT очень редко при order.margin() возникает ошибка:
                 #    order.py, line 492, in margin
@@ -174,7 +172,7 @@ class QKBroker(with_metaclass(MetaQKBroker, BrokerBase)):
             except (KeyError, IndexError):  # При ошибке
                 order.status = Order.Margin  # все равно ставим статус заявки Order.Margin
             self.notifs.append(order.clone())  # Уведомляем брокера о недостатке средств
-            self.store.OCOCheck(order)  # Проверяем связанные заявки
+            self.store.OCOPCCheck(order)  # Проверяем связанные и родительскую/дочерние заявки (Margin)
 
     def OnTrade(self, data):
         """Обработчик события получения новой / изменения существующей сделки.
@@ -233,4 +231,4 @@ class QKBroker(with_metaclass(MetaQKBroker, BrokerBase)):
             self.notifs.append(order.clone())  # Уведомляем брокера о полном исполнении заявки
             # Снимаем oco-заявку только после полного исполнения заявки
             # Если нужно снять oco-заявку на частичном исполнении, то прописываем это правило в ТС
-            self.store.OCOCheck(order)  # Проверяем связанные заявки
+            self.store.OCOPCCheck(order)  # Проверяем связанные и родительскую/дочерние заявки (Completed)
