@@ -82,13 +82,13 @@ class QKBroker(with_metaclass(MetaQKBroker, BrokerBase)):
 
     def buy(self, owner, data, size, price=None, plimit=None, exectype=None, valid=None, tradeid=0, oco=None, trailamount=None, trailpercent=None, parent=None, transmit=True, **kwargs):
         """Заявка на покупку"""
-        order = self.CreateOrder(owner, data, size, price, plimit, exectype, valid, oco, True, ClientCode=self.p.ClientCode, TradeAccountId=self.p.TradeAccountId, **kwargs)
+        order = self.CreateOrder(owner, data, size, price, plimit, exectype, valid, oco, parent, transmit, True, ClientCode=self.p.ClientCode, TradeAccountId=self.p.TradeAccountId, **kwargs)
         self.notifs.append(order.clone())  # Удедомляем брокера об отправке новой заявки на рынок
         return order
 
     def sell(self, owner, data, size, price=None, plimit=None, exectype=None, valid=None, tradeid=0, oco=None, trailamount=None, trailpercent=None, parent=None, transmit=True, **kwargs):
         """Заявка на продажу"""
-        order = self.CreateOrder(owner, data, size, price, plimit, exectype, valid, oco, False, ClientCode=self.p.ClientCode, TradeAccountId=self.p.TradeAccountId, **kwargs)
+        order = self.CreateOrder(owner, data, size, price, plimit, exectype, valid, oco, parent, transmit, False, ClientCode=self.p.ClientCode, TradeAccountId=self.p.TradeAccountId, **kwargs)
         self.notifs.append(order.clone())  # Удедомляем брокера об отправке новой заявки на рынок
         return order
 
