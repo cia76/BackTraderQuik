@@ -4,7 +4,7 @@ import time
 
 from backtrader import BrokerBase
 from backtrader.utils.py3 import with_metaclass
-from backtrader import Order
+from backtrader import Order, BuyOrder, SellOrder
 
 from BackTraderQuik import QKStore
 
@@ -36,6 +36,7 @@ class QKBroker(with_metaclass(MetaQKBroker, BrokerBase)):
         super(QKBroker, self).__init__()
         self.store = QKStore(**kwargs)  # Хранилище QUIK
         self.notifs = collections.deque()  # Очередь уведомлений о заявках
+        self.newTransId = 1  # Следующий внутренний номер транзакции заявки (В QUIK задается пользователем)
         self.tradeNums = dict()  # Список номеров сделок по тикеру для фильтрации дублей сделок
         self.startingcash = self.cash = 0  # Стартовые и текущие свободные средства по счету
         self.startingvalue = self.value = 0  # Стартовый и текущий баланс счета
@@ -81,13 +82,13 @@ class QKBroker(with_metaclass(MetaQKBroker, BrokerBase)):
 
     def buy(self, owner, data, size, price=None, plimit=None, exectype=None, valid=None, tradeid=0, oco=None, trailamount=None, trailpercent=None, parent=None, transmit=True, **kwargs):
         """Заявка на покупку"""
-        order = self.store.CreateOrder(owner, data, size, price, plimit, exectype, valid, oco, True, ClientCode=self.p.ClientCode, TradeAccountId=self.p.TradeAccountId, **kwargs)
+        order = self.CreateOrder(owner, data, size, price, plimit, exectype, valid, oco, True, ClientCode=self.p.ClientCode, TradeAccountId=self.p.TradeAccountId, **kwargs)
         self.notifs.append(order.clone())  # Удедомляем брокера об отправке новой заявки на рынок
         return order
 
     def sell(self, owner, data, size, price=None, plimit=None, exectype=None, valid=None, tradeid=0, oco=None, trailamount=None, trailpercent=None, parent=None, transmit=True, **kwargs):
         """Заявка на продажу"""
-        order = self.store.CreateOrder(owner, data, size, price, plimit, exectype, valid, oco, False, ClientCode=self.p.ClientCode, TradeAccountId=self.p.TradeAccountId, **kwargs)
+        order = self.CreateOrder(owner, data, size, price, plimit, exectype, valid, oco, False, ClientCode=self.p.ClientCode, TradeAccountId=self.p.TradeAccountId, **kwargs)
         self.notifs.append(order.clone())  # Удедомляем брокера об отправке новой заявки на рынок
         return order
 
@@ -111,6 +112,45 @@ class QKBroker(with_metaclass(MetaQKBroker, BrokerBase)):
         self.store.qpProvider.OnTransReply = self.store.qpProvider.DefaultHandler  # Ответ на транзакцию пользователя
         self.store.qpProvider.OnTrade = self.store.qpProvider.DefaultHandler  # Получение новой / изменение существующей сделки
         self.store.BrokerCls = None  # Удаляем класс брокера из хранилища
+
+    def CreateOrder(self, owner, data, size, price=None, plimit=None, exectype=None, valid=None, oco=None, parent=None, transmit=True, IsBuy=True, **kwargs):
+        """
+        Создание заявки
+        Привязка параметров счета и тикера
+        Обработка связанных и родительской/дочерних заявок
+        """
+        order = BuyOrder(owner=owner, data=data, size=size, price=price, pricelimit=plimit, exectype=exectype, valid=valid, oco=oco, parent=parent, transmit=transmit) if IsBuy \
+            else SellOrder(owner=owner, data=data, size=size, price=price, pricelimit=plimit, exectype=exectype, valid=valid, oco=oco, parent=parent, transmit=transmit)  # Заявка на покупку/продажу
+        order.ref = self.newTransId  # Ставим номер транзакции в заявку
+        self.newTransId += 1  # Увеличиваем номер транзакции для будущих заявок
+        order.addcomminfo(self.getcommissioninfo(data))  # По тикеру выставляем комиссии в заявку. Нужно для исполнения заявки в BackTrader
+        order.addinfo(**kwargs)  # Передаем в заявку все дополнительные свойства из брокера, в т.ч. ClientCode и TradeAccountId
+        classCode, secCode = self.store.DataNameToClassSecCode(data._dataname)  # Из названия тикера получаем код площадки и тикера
+        order.addinfo(ClassCode=classCode, SecCode=secCode)  # Код площадки ClassCode и тикера SecCode
+        si = self.store.GetSecurityInfo(classCode, secCode)  # Получаем параметры тикера (min_price_step, scale)
+        if si is None:  # Если тикер не найден
+            print(f'Постановка заявки {order.ref} по тикеру {classCode}.{secCode} отменена. Тикер не найден')
+            order.reject()  # то отменяем заявку
+            return order  # Возвращаем отмененную заявку
+        order.addinfo(Slippage=float(si['min_price_step']) * self.store.p.StopSteps)  # Размер проскальзывания в деньгах Slippage
+        order.addinfo(Scale=int(si['scale']))  # Кол-во значащих цифр после запятой Scale
+        if oco is not None:  # Если есть связанная заявка
+            self.store.ocos[order.ref] = oco.ref  # то заносим в список связанных заявок
+        if not transmit or parent is not None:  # Для родительской/дочерних заявок
+            parentRef = getattr(order.parent, 'ref', order.ref)  # Номер транзакции родительской заявки или номер заявки, если родительской заявки нет
+            if order.ref != parentRef and parentRef not in self.store.pcs:  # Если есть родительская заявка, но она не найдена в очереди родительских/дочерних заявок
+                print(f'Постановка заявки {order.ref} по тикеру {classCode}.{secCode} отменена. Родительская заявка не найдена')
+                order.reject()  # то отменяем заявку
+                return order  # Возвращаем отмененную заявку
+            pcs = self.store.pcs[parentRef]  # В очередь к родительской заявке
+            pcs.append(order)  # добавляем заявку (родительскую или дочернюю)
+        if parent is None and transmit:  # Для НЕ родительских/дочерних заявок
+            return self.store.PlaceOrder(order)  # Отправляем заявку на рынок
+        elif transmit:  # Если последняя заявка в цепочке родительской/дочерних заявок (transmit=True)
+            self.notifs.append(order.clone())  # Удедомляем брокера о создании новой заявки
+            return self.store.PlaceOrder(order.parent)  # Отправляем родительскую заявку на рынок
+        # Если не последняя заявка в цепочке родительской/дочерних заявок (transmit=False)
+        return order  # то возвращаем созданную заявку со статусом Created. На рынок ее пока не ставим
 
     def OnTransReply(self, data):
         """Обработчик события ответа на транзакцию пользователя"""

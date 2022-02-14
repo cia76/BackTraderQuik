@@ -4,7 +4,7 @@ from pytz import timezone
 
 from backtrader.metabase import MetaParams
 from backtrader.utils.py3 import with_metaclass
-from backtrader import Order, BuyOrder, SellOrder
+from backtrader import Order
 from backtrader.position import Position
 
 from QuikPy import QuikPy
@@ -59,7 +59,6 @@ class QKStore(with_metaclass(MetaSingleton, object)):
         self.newBars = []  # Новые бары по подписке из QUIK
         self.positions = collections.defaultdict(Position)  # Список позиций
         self.orders = collections.OrderedDict()  # Список заявок, отправленных на рынок
-        self.newTransId = 1  # Следующий внутренний номер транзакции заявки (задается пользователем)
         self.orderNums = {}  # Словарь заявок на рынке. Индекс - номер транзакции, значение - номер заявки на рынке
         self.pcs = collections.defaultdict(collections.deque)  # Очередь всех родительских/дочерних заявок (Parent - Children)
         self.ocos = {}  # Список связанных заявок (One Cancel Others)
@@ -239,45 +238,6 @@ class QKStore(with_metaclass(MetaSingleton, object)):
             lastPrice = self.QKToBTPrice(classCode, secCode, lastPrice)  # Для рынка облигаций последнюю цену сделки умножаем на 10
             posValue += pos.size * lastPrice  # Добавляем стоимость позиции
         return posValue  # Стоимость позиций по счету
-
-    def CreateOrder(self, owner, data, size, price=None, plimit=None, exectype=None, valid=None, oco=None, parent=None, transmit=True, IsBuy=True, **kwargs):
-        """
-        Создание заявки
-        Привязка параметров счета и тикера
-        Обработка связанных и родительской/дочерних заявок
-        """
-        order = BuyOrder(owner=owner, data=data, size=size, price=price, pricelimit=plimit, exectype=exectype, valid=valid, oco=oco, parent=parent, transmit=transmit) if IsBuy \
-            else SellOrder(owner=owner, data=data, size=size, price=price, pricelimit=plimit, exectype=exectype, valid=valid, oco=oco, parent=parent, transmit=transmit)  # Заявка на покупку/продажу
-        order.ref = self.newTransId  # Ставим номер транзакции в заявку
-        self.newTransId += 1  # Увеличиваем номер транзакции для будущих заявок
-        order.addinfo(**kwargs)  # Передаем в заявку все дополнительные свойства из брокера, в т.ч. ClientCode и TradeAccountId
-        order.addcomminfo(self.BrokerCls.getcommissioninfo(data))  # По тикеру выставляем комиссии в заявку. Нужно для исполнения заявки в BackTrader
-        classCode, secCode = self.DataNameToClassSecCode(data._dataname)  # Из названия тикера получаем код площадки и тикера
-        order.addinfo(ClassCode=classCode, SecCode=secCode)  # Код площадки ClassCode и тикера SecCode
-        si = self.GetSecurityInfo(classCode, secCode)  # Получаем параметры тикера (min_price_step, scale)
-        if si is None:  # Если тикер не найден
-            print(f'Постановка заявки {order.ref} по тикеру {classCode}.{secCode} отменена. Тикер не найден')
-            order.reject()  # то отменяем заявку
-            return order  # Возвращаем отмененную заявку
-        order.addinfo(Slippage=float(si['min_price_step']) * self.p.StopSteps)  # Размер проскальзывания в деньгах Slippage
-        order.addinfo(Scale=int(si['scale']))  # Кол-во значащих цифр после запятой Scale
-        if oco is not None:  # Если есть связанная заявка
-            self.ocos[order.ref] = oco.ref  # то заносим в список связанных заявок
-        if not transmit or parent is not None:  # Для родительской/дочерних заявок
-            parentRef = getattr(order.parent, 'ref', order.ref)  # Номер транзакции родительской заявки или номер заявки, если родительской заявки нет
-            if order.ref != parentRef and parentRef not in self.pcs:  # Если есть родительская заявка, но она не найдена в очереди родительских/дочерних заявок
-                print(f'Постановка заявки {order.ref} по тикеру {classCode}.{secCode} отменена. Родительская заявка не найдена')
-                order.reject()  # то отменяем заявку
-                return order  # Возвращаем отмененную заявку
-            pcs = self.pcs[parentRef]  # В очередь к родительской заявке
-            pcs.append(order)  # добавляем заявку (родительскую или дочернюю)
-        if parent is None and transmit:  # Для НЕ родительских/дочерних заявок
-            return self.PlaceOrder(order)  # Отправляем заявку на рынок
-        elif transmit:  # Если последняя заявка в цепочке родительской/дочерних заявок (transmit=True)
-            self.BrokerCls.notifs.append(order.clone())  # Удедомляем брокера о создании новой заявки
-            return self.PlaceOrder(order.parent)  # Отправляем родительскую заявку на рынок
-        # Если не последняя заявка в цепочке родительской/дочерних заявок (transmit=False)
-        return order  # то возвращаем созданную заявку со статусом Created. На рынок ее пока не ставим
 
     def PlaceOrder(self, order):
         """Отправка заявки (транзакции) на рынок"""
