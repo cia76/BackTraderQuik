@@ -144,11 +144,12 @@ class QKBroker(with_metaclass(MetaQKBroker, BrokerBase)):
                 return order  # Возвращаем отмененную заявку
             pcs = self.store.pcs[parentRef]  # В очередь к родительской заявке
             pcs.append(order)  # добавляем заявку (родительскую или дочернюю)
-        if parent is None and transmit:  # Для НЕ родительских/дочерних заявок
-            return self.store.PlaceOrder(order)  # Отправляем заявку на рынок
-        elif transmit:  # Если последняя заявка в цепочке родительской/дочерних заявок (transmit=True)
-            self.notifs.append(order.clone())  # Удедомляем брокера о создании новой заявки
-            return self.store.PlaceOrder(order.parent)  # Отправляем родительскую заявку на рынок
+        if transmit:  # Если обычная заявка или последняя дочерняя заявка
+            if parent is None:  # Для обычных заявок
+                return self.store.PlaceOrder(order)  # Отправляем заявку на рынок
+            else:  # Если последняя заявка в цепочке родительской/дочерних заявок
+                self.notifs.append(order.clone())  # Удедомляем брокера о создании новой заявки
+                return self.store.PlaceOrder(order.parent)  # Отправляем родительскую заявку на рынок
         # Если не последняя заявка в цепочке родительской/дочерних заявок (transmit=False)
         return order  # то возвращаем созданную заявку со статусом Created. На рынок ее пока не ставим
 
