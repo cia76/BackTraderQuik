@@ -261,7 +261,7 @@ class QKStore(with_metaclass(MetaSingleton, object)):
         if price.is_integer():  # Целое значение цены мы должны отправлять без десятичных знаков
             price = int(price)  # поэтому, приводим такую цену к целому числу
         transaction = {  # Все значения должны передаваться в виде строк
-            'TRANS_ID': str(self.newTransId),  # Номер транзакции задается клиентом
+            'TRANS_ID': str(order.ref),  # Номер транзакции задается клиентом
             'CLIENT_CODE': order.info['ClientCode'],  # Код клиента. Для фьючерсов его нет
             'ACCOUNT': order.info['TradeAccountId'],  # Счет
             'CLASSCODE': classCode,  # Код площадки
