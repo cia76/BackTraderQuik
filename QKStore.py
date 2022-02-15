@@ -336,12 +336,13 @@ class QKStore(with_metaclass(MetaSingleton, object)):
 
         if order.parent is None and not order.transmit and order.status == Order.Completed:  # Если исполнена родительская заявка
             pcs = self.pcs[order.ref]  # Получаем очередь родительской/дочерних заявок
-            for child in pcs[1:]:  # Пробегаемся по всем дочерним (кроме первой) заявкам
-                self.PlaceOrder(child)  # Отправляем дочернюю заявку на рынок
+            for child in pcs:  # Пробегаемся по всем заявкам
+                if child.parent is not None:  # Пропускаем первую (родительскую) заявку
+                    self.PlaceOrder(child)  # Отправляем дочернюю заявку на рынок
         elif order.parent is not None:  # Если исполнена/отменена дочерняя заявка
             pcs = self.pcs[order.parent.ref]  # Получаем очередь родительской/дочерних заявок
-            for child in pcs[1:]:  # Пробегаемся по всем дочерним (кроме первой) заявкам
-                if child.ref != order.ref:
+            for child in pcs:  # Пробегаемся по всем заявкам
+                if child.parent is not None and child.ref != order.ref:  # Пропускаем первую (родительскую) заявку и исполненную заявку
                     self.CancelOrder(child)  # Отменяем дочернюю заявку
 
     # QKBroker: Обработка событий подключения к QUIK / отключения от QUIK
