@@ -98,8 +98,9 @@ class QKData(with_metaclass(MetaQKData, AbstractDataBase)):
             if date2num(dt) <= self.lines.datetime[-1]:  # Если получили предыдущий или более старый бар
                 return None  # то нового бара нет, будем заходить еще
             dtMarketBarClose = dt + timedelta(minutes=self.interval)  # Биржевое время закрытия бара
-            dtMarketNow = self.GetQUIKDateTimeNow()  # Текущее биржевое время из QUIK
+            dtMarketNow = self.GetQUIKDateTimeNow() + timedelta(seconds=3)  # Текущее биржевое время из QUIK. Корректируем его на несколько секунд, т.к. минутный бар может прийти в 59 секунд прошлой минуты
             if dtMarketBarClose > dtMarketNow:  # Если получили несформированный бар. Например, дневной бар в середине сессии
+                print(dtMarketBarClose, dtMarketNow)
                 return None  # то нового бара нет, будем заходить еще
             dtMarketNextBarClose = dt + timedelta(minutes=self.interval * 2)  # Биржевое время закрытия следующего бара
             dtMarketNow = self.GetQUIKDateTimeNow()  # Текущее биржевое время из QUIK
