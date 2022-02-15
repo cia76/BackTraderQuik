@@ -243,7 +243,7 @@ class QKStore(with_metaclass(MetaSingleton, object)):
         """Отправка заявки (транзакции) на рынок"""
         classCode = order.info['ClassCode']  # Код площадки
         secCode = order.info['SecCode']  # Код тикера
-        size = self.SizeToLots(classCode, secCode, order.size)  # Размер позиции в лотах
+        size = abs(self.SizeToLots(classCode, secCode, order.size))  # Размер позиции в лотах. В QUIK всегда передает положительный размер лота
         price = order.price  # Цена заявки
         if price is None:  # Если цена не указана для рыночных заявок
             price = 0.00  # Цена рыночной заявки должна быть нулевой (кроме фьючерсов)
