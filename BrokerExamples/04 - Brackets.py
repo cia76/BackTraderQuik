@@ -1,17 +1,19 @@
 from datetime import datetime, time
 import backtrader as bt
 from BackTraderQuik.QKStore import QKStore  # Хранилище QUIK
-# from BackTraderQuik.QKBroker import QKBroker  # Брокер QUIK для вызвова напрямую (не рекомендуется)
 
 
-class LiveTradingEvents(bt.Strategy):
+class Brackets(bt.Strategy):
     """
-    Получение и отображение событий в QUIK:
-    - Изменение статуса приходящих баров (DELAYED / CONNECTED / DISCONNECTED / LIVE)
-    - Получение нового бара
-    - Изменение статуса заявок
-    - Изменение статуса позиций
+    Выставляем родительскую заявку на покупку на n% ниже цены закрытия
+    Вместе с ней выставляем дочерние заявки на выход с n% убытком/прибылью
+    При исполнении родительской заявки выставляем все дочерние
+    При исполнении дочерней заявки отменяем все остальные неисполненные дочерние
     """
+    params = (  # Параметры торговой системы
+        ('LimitPct', 1),  # Заявка на покупку на n% ниже цены закрытия
+    )
+
     def log(self, txt, dt=None):
         """Вывод строки с датой на консоль"""
         dt = bt.num2date(self.datas[0].datetime[0]) if dt is None else dt  # Заданная дата или дата текущего бара
@@ -20,13 +22,23 @@ class LiveTradingEvents(bt.Strategy):
     def __init__(self):
         """Инициализация торговой системы"""
         self.isLive = False  # Сначала будут приходить исторические данные, затем перейдем в режим реальной торговли
+        self.order = None  # Заявка на вход в позицию
 
     def next(self):
         """Получение следующего исторического/нового бара"""
-        for data in self.datas:  # Пробегаемся по всем запрошенным барам
-            self.log(f'{data.p.dataname} Open={data.open[0]:.2f}, High={data.high[0]:.2f}, Low={data.low[0]:.2f}, Close={data.close[0]:.2f}, Volume={data.volume[0]:.0f}')
-        if self.isLive:  # Если в режиме реальной торговли
-            self.log(f'Свободные средства: {self.broker.getcash()}, Баланс: {self.broker.getvalue()}')
+        if not self.isLive:  # Если не в режиме реальной торговли
+            return  # то выходим, дальше не продолжаем
+        if self.order and self.order.status == bt.Order.Submitted:  # Если заявка не исполнена (отправлена брокеру)
+            return  # то ждем исполнения, выходим, дальше не продолжаем
+        if not self.position:  # Если позиции нет
+            if self.order and self.order.status == bt.Order.Accepted:  # Если заявка не исполнена (принята брокером)
+                self.cancel(self.order)  # то снимаем заявку на вход
+            closeMinusN = self.data.close[0] * (1 - self.p.LimitPct / 100)  # Цена на n% ниже цены закрытия
+            closeMinus2N = self.data.close[0] * (1 - self.p.LimitPct / 100 * 2)  # Цена на 2n% ниже цены закрытия
+            # self.order = self.buy(exectype=bt.Order.Limit, price=closeMinusN, transmit=False)  # Родительская лимитная заявка на покупку
+            # orderStop = self.sell(exectype=bt.Order.Stop, price=closeMinus2N, size=self.order.size, parent=self.order, transmit=False)  # Дочерняя стоп заявка на продажу с убытком n%
+            # orderLimit = self.sell(exectype=bt.Order.Limit, price=self.close[0], size=self.order.size, parent=self.order, transmit=True)  # Дочерняя лимитная заявка на продажу с прибылью n%
+            self.order, orderStop, orderLimit = self.buy_bracket(limitprice=self.data.close[0], price=closeMinusN, stopprice=closeMinus2N)  # Bracket заявка в BT
 
     def notify_data(self, data, status, *args, **kwargs):
         """Изменение статуса приходящих баров"""
@@ -47,6 +59,7 @@ class LiveTradingEvents(bt.Strategy):
                 self.log(f'Bought @{order.executed.price:.2f}, Cost={order.executed.value:.2f}, Comm={order.executed.comm:.2f}')
             elif order.issell():  # Заявка на продажу
                 self.log(f'Sold @{order.executed.price:.2f}, Cost={order.executed.value:.2f}, Comm={order.executed.comm:.2f}')
+            self.order = None  # Сбрасываем заявку на вход в позицию
 
     def notify_trade(self, trade):
         """Изменение статуса позиции"""
@@ -62,8 +75,7 @@ if __name__ == '__main__':  # Точка входа при запуске это
     # symbol = 'TQBR.GAZP'
     symbol = 'SPBFUT.SiH2'
 
-    cerebro.addstrategy(LiveTradingEvents)  # Добавляем торговую систему
-    # broker = QKBroker(Host='<Ваш IP адрес>')  # Можно вызывать данные напрямую (не рекомендуется)
+    cerebro.addstrategy(Brackets, LimitPct=1)  # Добавляем торговую систему с лимитным входом в n%
     store = QKStore()  # Хранилище QUIK (QUIK на локальном компьютере)
     # store = QKStore(Host='<Ваш IP адрес>')  # Хранилище QUIK (К QUIK на удаленном компьютере обращаемся по IP или названию)
     broker = store.getbroker(use_positions=False)  # Брокер со счетом по умолчанию (срочный рынок РФ)

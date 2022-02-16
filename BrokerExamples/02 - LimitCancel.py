@@ -20,7 +20,6 @@ class LimitCancel(bt.Strategy):
 
     def __init__(self):
         """Инициализация торговой системы"""
-        self.close = self.datas[0].close  # Цены закрытия
         self.isLive = False  # Сначала будут приходить исторические данные, затем перейдем в режим реальной торговли
         self.order = None  # Заявка на вход/выход из позиции
 
@@ -33,10 +32,10 @@ class LimitCancel(bt.Strategy):
         if not self.position:  # Если позиции нет
             if self.order and self.order.status == bt.Order.Accepted:  # Если заявка не исполнена (принята брокером)
                 self.cancel(self.order)  # то снимаем ее
-            limitPrice = self.close[0] * (1 - self.p.LimitPct / 100)  # На n% ниже цены закрытия
+            limitPrice = self.data.close[0] * (1 - self.p.LimitPct / 100)  # На n% ниже цены закрытия
             self.order = self.buy(exectype=bt.Order.Limit, price=limitPrice)  # Лимитная заявка на покупку
         else:  # Если позиция есть
-            self.order = self.sell(size=self.position.size)  # Заявка на продажу всей позиции по рыночной цене
+            self.order = self.close()  # Заявка на закрытие позиции по рыночной цене
 
     def notify_data(self, data, status, *args, **kwargs):
         """Изменение статуса приходящих баров"""
