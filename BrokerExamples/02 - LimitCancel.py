@@ -4,13 +4,15 @@ from BackTraderQuik.QKStore import QKStore  # Хранилище QUIK
 
 
 class LimitCancel(bt.Strategy):
-    """Выставляем заявку на покупку на 1% ниже цены закрытия
+    """
+    Выставляем заявку на покупку на n% ниже цены закрытия
     Если за 1 бар заявка не срабатывает, то закрываем ее
     Если срабатывает, то закрываем позицию. Неважно, с прибылью или убытком
     """
     params = (  # Параметры торговой системы
         ('LimitPct', 1),  # Заявка на покупку на 1% ниже цены закрытия
     )
+
     def log(self, txt, dt=None):
         """Вывод строки с датой на консоль"""
         dt = bt.num2date(self.datas[0].datetime[0]) if dt is None else dt  # Заданная дата или дата текущего бара
@@ -33,7 +35,7 @@ class LimitCancel(bt.Strategy):
         if not self.position:  # Если позиции нет
             if self.order and self.order.status == bt.Order.Accepted:  # Если заявка не исполнена (принята брокером)
                 self.cancel(self.order)  # то снимаем ее
-            limitPrice = self.close[0] * (100 - self.params.LimitPct) / 100  # На 1% ниже цены закрытия
+            limitPrice = self.close[0] * (1 - self.p.LimitPct / 100)  # На n% ниже цены закрытия
             self.order = self.buy(exectype=bt.Order.Limit, price=limitPrice)  # Лимитная заявка на покупку
         else:  # Если позиция есть
             self.order = self.sell(size=self.position.size)  # Заявка на продажу всей позиции по рыночной цене
@@ -46,22 +48,18 @@ class LimitCancel(bt.Strategy):
 
     def notify_order(self, order):
         """Изменение статуса заявки"""
-        if order.status in [order.Submitted, order.Accepted]:  # Если заявка не исполнена (отправлена брокеру или принята брокером)
-            self.log(f'Order Status: {order.getstatusname()}. TransId={order.ref}')
-            return  # то выходим, дальше не продолжаем
-
-        if order.status in [order.Canceled]:  # Если заявка отменена
-            self.log(f'Order Status: {order.getstatusname()}. TransId={order.ref}')
-            return  # то выходим, дальше не продолжаем
-
-        if order.status in [order.Completed]:  # Если заявка исполнена
+        if order.status in (order.Created, order.Submitted, order.Accepted):  # Если заявка создана, отправлена брокеру, принята брокером (не исполнена)
+            self.log(f'Alive Status: {order.getstatusname()}. TransId={order.ref}')
+        elif order.status in (order.Canceled, order.Margin, order.Rejected, order.Expired):  # Если заявка отменена, нет средств, заявка отклонена брокером, снята по времени (снята)
+            self.log(f'Cancel Status: {order.getstatusname()}. TransId={order.ref}')
+        elif order.status == order.Partial:  # Если заявка частично исполнена
+            self.log(f'Part Status: {order.getstatusname()}. TransId={order.ref}')
+        elif order.status == order.Completed:  # Если заявка полностью исполнена
             if order.isbuy():  # Заявка на покупку
                 self.log(f'Bought @{order.executed.price:.2f}, Cost={order.executed.value:.2f}, Comm={order.executed.comm:.2f}')
             elif order.issell():  # Заявка на продажу
                 self.log(f'Sold @{order.executed.price:.2f}, Cost={order.executed.value:.2f}, Comm={order.executed.comm:.2f}')
-        elif order.status in [order.Margin, order.Rejected]:  # Нет средств, или заявка отклонена брокером
-            self.log(f'Order Status: {order.getstatusname()}. TransId={order.ref}')
-        self.order = None  # Этой заявки больше нет
+            self.order = None  # Этой заявки больше нет
 
     def notify_trade(self, trade):
         """Изменение статуса позиции"""
@@ -79,7 +77,7 @@ if __name__ == '__main__':  # Точка входа при запуске это
     # symbol = 'TQBR.GAZP'
     symbol = 'SPBFUT.SiH2'
 
-    cerebro.addstrategy(LimitCancel, LimitPct=1)  # Добавляем торговую систему с параметрами
+    cerebro.addstrategy(LimitCancel, LimitPct=1)  # Добавляем торговую систему с лимитным входом в n%
     store = QKStore()  # Хранилище QUIK (QUIK на локальном компьютере)
     # store = QKStore(Host='<Ваш IP адрес>')  # Хранилище QUIK (QUIK на удаленном компьютере)
     broker = store.getbroker(use_positions=False)  # Брокер со счетом по умолчанию (срочный рынок РФ)
@@ -87,7 +85,7 @@ if __name__ == '__main__':  # Точка входа при запуске это
 
     cerebro.setbroker(broker)  # Устанавливаем брокера
     data = store.getdata(dataname=symbol, timeframe=bt.TimeFrame.Minutes, compression=1,
-                         fromdate=datetime(2021, 11, 19, 8, 00), sessionstart=time(7, 00), LiveBars=True)  # Исторические и новые минутные бары за все время
+                         fromdate=datetime(2022, 2, 16), sessionstart=time(7, 0), LiveBars=True)  # Исторические и новые минутные бары за все время
     cerebro.adddata(data)  # Добавляем данные
     cerebro.addsizer(bt.sizers.FixedSize, stake=1000)  # Кол-во акций для покупки/продажи
     cerebro.run()  # Запуск торговой системы
