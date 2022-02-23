@@ -19,8 +19,10 @@
 
 В папке BrokerExamples находится хорошо документированный код примеров по работе со счетами, заявками и позициями из QUIK.
 
-1. **LiveTradingEvents.py** - Перехват событий QUIK
-2. **LimitCancel.py** - Выставление и отмена заявок
+1. **LiveTradingEvents.py** - Обработка торговых событий. [Видео с разбором кода >>>](https://finlab.vip/livetradingevents/)
+2. **LimitCancel.py** - Постановка и снятие заявок. [Видео с разбором кода >>>](https://finlab.vip/limitcancel/)
+3. **OCO.py** - Взаимоотменяемые (One Cancel Others, OCO) заявки. [Видео с разбором кода >>>](https://finlab.vip/oco/)
+4. **Brackets.py** - Цепочка заявок (Brackets). [Видео с разбором кода >>>](https://finlab.vip/brackets/)
 
 ### Авторство, право использования, развитие
 Автор данной библиотеки Чечет Игорь Александрович.
