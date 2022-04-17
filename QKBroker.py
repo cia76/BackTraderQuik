@@ -25,6 +25,8 @@ class QKBroker(with_metaclass(MetaQKBroker, BrokerBase)):
         ('use_positions', True),  # При запуске брокера подтягиваются текущие позиции с биржи
         ('Lots', True),  # Входящий остаток в лотах (задается брокером)
         ('ClientCode', ''),  # Код клиента
+        # По статье https://zen.yandex.ru/media/id/5e9a612424270736479fad54/bitva-s-finam-624f12acc3c38f063178ca95
+        ('ClientCodeForOrders', ''),  # Номер торгового терминала. У брокера Финам требуется для совершения торговых операций
         ('FirmId', 'SPBFUT'),  # Фирма
         ('TradeAccountId', 'SPBFUT00PST'),  # Счет
         ('LimitKind', 0),  # День лимита
@@ -82,13 +84,17 @@ class QKBroker(with_metaclass(MetaQKBroker, BrokerBase)):
 
     def buy(self, owner, data, size, price=None, plimit=None, exectype=None, valid=None, tradeid=0, oco=None, trailamount=None, trailpercent=None, parent=None, transmit=True, **kwargs):
         """Заявка на покупку"""
-        order = self.CreateOrder(owner, data, size, price, plimit, exectype, valid, oco, parent, transmit, True, ClientCode=self.p.ClientCode, TradeAccountId=self.p.TradeAccountId, **kwargs)
+        if not self.p.ClientCodeForOrders:  # Для брокера Финам нужно вместо кода клиента
+            self.p.ClientCodeForOrders = self.p.ClientCode  # указать Номер торгового терминала
+        order = self.CreateOrder(owner, data, size, price, plimit, exectype, valid, oco, parent, transmit, True, ClientCode=self.p.ClientCodeForOrders, TradeAccountId=self.p.TradeAccountId, **kwargs)
         self.notifs.append(order.clone())  # Удедомляем брокера об отправке новой заявки на рынок
         return order
 
     def sell(self, owner, data, size, price=None, plimit=None, exectype=None, valid=None, tradeid=0, oco=None, trailamount=None, trailpercent=None, parent=None, transmit=True, **kwargs):
         """Заявка на продажу"""
-        order = self.CreateOrder(owner, data, size, price, plimit, exectype, valid, oco, parent, transmit, False, ClientCode=self.p.ClientCode, TradeAccountId=self.p.TradeAccountId, **kwargs)
+        if not self.p.ClientCodeForOrders:  # Для брокера Финам нужно вместо кода клиента
+            self.p.ClientCodeForOrders = self.p.ClientCode  # указать Номер торгового терминала
+        order = self.CreateOrder(owner, data, size, price, plimit, exectype, valid, oco, parent, transmit, False, ClientCode=self.p.ClientCodeForOrders, TradeAccountId=self.p.TradeAccountId, **kwargs)
         self.notifs.append(order.clone())  # Удедомляем брокера об отправке новой заявки на рынок
         return order
 
