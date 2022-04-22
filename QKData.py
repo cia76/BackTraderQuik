@@ -2,7 +2,7 @@ from datetime import datetime, timedelta
 import pytz
 
 from backtrader.feed import AbstractDataBase
-from backtrader import TimeFrame, date2num, num2date
+from backtrader import TimeFrame, date2num
 from backtrader.utils.py3 import with_metaclass
 
 from BackTraderQuik import QKStore
@@ -17,6 +17,7 @@ class MetaQKData(AbstractDataBase.__class__):
 class QKData(with_metaclass(MetaQKData, AbstractDataBase)):
     """Данные QUIK"""
     params = (
+        ('FourPriceDoji', False),  # False - не пропускать дожи 4-х цен, True - пропускать
         ('LiveBars', False),  # False - только история, True - история и новые бары
     )
 
@@ -84,7 +85,7 @@ class QKData(with_metaclass(MetaQKData, AbstractDataBase)):
         """Загружаем бар из истории или новый бар в BackTrader"""
         if self.newCandleSubscribed:  # Если получаем новые бары по подписке
             if len(self.store.newBars) == 0:  # Если в хранилище никаких новых баров нет
-                return None  # то и нового бара нет, будем заходить еще
+                return None  # то нового бара нет, будем заходить еще
             newBars = [newBar for newBar in self.store.newBars  # Смотрим в хранилище новых баров
                        if newBar['class'] == self.classCode and  # бары с нужным кодом площадки,
                        newBar['sec'] == self.secCode and  # тикером,
@@ -134,10 +135,14 @@ class QKData(with_metaclass(MetaQKData, AbstractDataBase)):
         # Записываем полученный исторический / новый бар
         jsonDateTime = self.jsonBar['datetime']  # Вытаскиваем составное значение даты и времени открытия бара
         dt = datetime(jsonDateTime['year'], jsonDateTime['month'], jsonDateTime['day'], jsonDateTime['hour'], jsonDateTime['min'])  # Время открытия бара
+        h = self.store.QKToBTPrice(self.classCode, self.secCode, self.jsonBar['high'])  # High
+        l = self.store.QKToBTPrice(self.classCode, self.secCode, self.jsonBar['low'])  # Low
+        if not self.p.FourPriceDoji and h == l:  # Если не пропускаем дожи 4-х цен, но такой бар пришел
+            return None  # то нового бара нет, будем заходить еще
         self.lines.datetime[0] = date2num(dt)  # Переводим в формат хранения даты/времени в BackTrader
         self.lines.open[0] = self.store.QKToBTPrice(self.classCode, self.secCode, self.jsonBar['open'])  # Open
-        self.lines.high[0] = self.store.QKToBTPrice(self.classCode, self.secCode, self.jsonBar['high'])  # High
-        self.lines.low[0] = self.store.QKToBTPrice(self.classCode, self.secCode, self.jsonBar['low'])  # Low
+        self.lines.high[0] = h  # High
+        self.lines.low[0] = l  # Low
         self.lines.close[0] = self.store.QKToBTPrice(self.classCode, self.secCode,  self.jsonBar['close'])  # Close
         self.lines.volume[0] = self.jsonBar['volume']  # Volume
         self.lines.openinterest[0] = 0  # Открытый интерес в QUIK не учитывается
