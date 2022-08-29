@@ -235,10 +235,11 @@ class QKStore(with_metaclass(MetaSingleton, object)):
                 return None
         # Для остальных фирм
         posValue = 0  # Стоимость позиций по счету
-        for dataname, pos in self.positions.items():  # Пробегаемся по всем открытым позициям
+        for dataname in list(self.positions.keys()):  # Пробегаемся по копии позиций (чтобы не было ошибки при изменении позиций)
             classCode, secCode = self.DataNameToClassSecCode(dataname)  # По названию тикера получаем код площадки и код тикера
             lastPrice = float(self.qpProvider.GetParamEx(classCode, secCode, 'LAST')['data']['param_value'])  # Последняя цена сделки
             lastPrice = self.QKToBTPrice(classCode, secCode, lastPrice)  # Для рынка облигаций последнюю цену сделки умножаем на 10
+            pos = self.positions[dataname]  # Получаем позицию по тикеру
             posValue += pos.size * lastPrice  # Добавляем стоимость позиции
         return posValue  # Стоимость позиций по счету
 
