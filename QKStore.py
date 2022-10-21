@@ -290,6 +290,13 @@ class QKStore(with_metaclass(MetaSingleton, object)):
             elif isinstance(order.valid, date):  # Если заявка поставлена до даты
                 expiryDate = order.valid.strftime('%Y%m%d')  # то будем держать ее до указанной даты
             transaction['EXPIRY_DATE'] = expiryDate  # Срок действия стоп заявки
+            if order.info['take_profit']:   # если тип ордера - тэйк-профит
+                transaction['STOP_ORDER_KIND'] = 'TAKE_PROFIT_STOP_ORDER'   # устанавливаем тип ордера в тэйк-профит
+                transaction.pop('PRICE', None)  # в тэйк-профит это поле не нужно - убираем его
+                transaction['SPREAD'] = f"{order.info['take_step']:.{order.info['take_scale']}f}"   # формируем строку для величины защитного спрэда
+                transaction['SPREAD_UNITS'] = 'PRICE_UNITS'     # устанавливаем единицу измерения защитного спрэда - в параметрах цены (шаг изменения равен шагу цены по данному инструменту)
+                transaction['OFFSET'] = f"{order.info['take_step']:.{order.info['take_scale']}f}"   # формируем строку для величины отступа от максимума (минимума) цены последней сделки
+                transaction['OFFSET_UNITS'] = 'PRICE_UNITS'     # устанавливаем единицу измерения отступа - в параметрах цены (шаг изменения равен шагу цены по данному инструменту)
         else:  # Для рыночных или лимитных заявок
             transaction['ACTION'] = 'NEW_ORDER'  # Новая рыночная или лимитная заявка
             transaction['TYPE'] = 'L' if order.exectype == Order.Limit else 'M'  # L = лимитная заявка (по умолчанию), M = рыночная заявка
