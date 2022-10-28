@@ -283,13 +283,21 @@ class QKStore(with_metaclass(MetaSingleton, object)):
                 limitPrice = price + slippage  # то будем покупать по большей цене в размер проскальзывания
             else:  # Если цена не задана, и продаем
                 limitPrice = price - slippage  # то будем продавать по меньшей цене в размер проскальзывания
-            transaction['PRICE'] = str(limitPrice)  # Лимитная цена исполнения
             expiryDate = 'GTC'  # По умолчанию будем держать заявку до отмены GTC = Good Till Cancelled
             if order.valid in [Order.DAY, 0]:  # Если заявка поставлена на день
                 expiryDate = 'TODAY'  # то будем держать ее до окончания текущей торговой сессии
             elif isinstance(order.valid, date):  # Если заявка поставлена до даты
                 expiryDate = order.valid.strftime('%Y%m%d')  # то будем держать ее до указанной даты
             transaction['EXPIRY_DATE'] = expiryDate  # Срок действия стоп заявки
+            if order.info['StopOrderKind'] == 'TAKE_PROFIT_STOP_ORDER':  # Если тип стоп заявки это тейк профит
+                minPriceStep = order.info['MinPriceStep']  # Минимальный шаг цены
+                transaction['STOP_ORDER_KIND'] = order.info['StopOrderKind']  # Тип заявки TAKE_PROFIT_STOP_ORDER
+                transaction['SPREAD_UNITS'] = 'PRICE_UNITS'  # Единицы измерения защитного спрэда в параметрах цены (шаг изменения равен шагу цены по данному инструменту)
+                transaction['SPREAD'] = round(minPriceStep, scale)  # Размер защитного спрэда
+                transaction['OFFSET_UNITS'] = 'PRICE_UNITS'  # Единицы измерения отступа в параметрах цены (шаг изменения равен шагу цены по данному инструменту)
+                transaction['OFFSET'] = round(minPriceStep, scale)  # Размер отступа
+            else:  # Для обычных стоп заявок
+                transaction['PRICE'] = str(limitPrice)  # Лимитная цена исполнения
         else:  # Для рыночных или лимитных заявок
             transaction['ACTION'] = 'NEW_ORDER'  # Новая рыночная или лимитная заявка
             transaction['TYPE'] = 'L' if order.exectype == Order.Limit else 'M'  # L = лимитная заявка (по умолчанию), M = рыночная заявка

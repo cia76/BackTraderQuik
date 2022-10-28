@@ -130,7 +130,7 @@ class QKBroker(with_metaclass(MetaQKBroker, BrokerBase)):
         order.ref = self.newTransId  # Ставим номер транзакции в заявку
         self.newTransId += 1  # Увеличиваем номер транзакции для будущих заявок
         order.addcomminfo(self.getcommissioninfo(data))  # По тикеру выставляем комиссии в заявку. Нужно для исполнения заявки в BackTrader
-        order.addinfo(**kwargs)  # Передаем в заявку все дополнительные свойства из брокера, в т.ч. ClientCode и TradeAccountId
+        order.addinfo(**kwargs)  # Передаем в заявку все дополнительные свойства из брокера, в т.ч. ClientCode, TradeAccountId, StopOrderKind
         classCode, secCode = self.store.DataNameToClassSecCode(data._dataname)  # Из названия тикера получаем код площадки и тикера
         order.addinfo(ClassCode=classCode, SecCode=secCode)  # Код площадки ClassCode и тикера SecCode
         si = self.store.GetSecurityInfo(classCode, secCode)  # Получаем параметры тикера (min_price_step, scale)
@@ -138,6 +138,7 @@ class QKBroker(with_metaclass(MetaQKBroker, BrokerBase)):
             print(f'Постановка заявки {order.ref} по тикеру {classCode}.{secCode} отменена. Тикер не найден')
             order.reject()  # то отменяем заявку
             return order  # Возвращаем отмененную заявку
+        order.addinfo(MinPriceStep=float(si['min_price_step']))  # Минимальный шаг цены
         order.addinfo(Slippage=float(si['min_price_step']) * self.store.p.StopSteps)  # Размер проскальзывания в деньгах Slippage
         order.addinfo(Scale=int(si['scale']))  # Кол-во значащих цифр после запятой Scale
         if oco is not None:  # Если есть связанная заявка
