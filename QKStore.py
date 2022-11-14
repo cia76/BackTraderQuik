@@ -293,9 +293,9 @@ class QKStore(with_metaclass(MetaSingleton, object)):
                 minPriceStep = order.info['MinPriceStep']  # Минимальный шаг цены
                 transaction['STOP_ORDER_KIND'] = order.info['StopOrderKind']  # Тип заявки TAKE_PROFIT_STOP_ORDER
                 transaction['SPREAD_UNITS'] = 'PRICE_UNITS'  # Единицы измерения защитного спрэда в параметрах цены (шаг изменения равен шагу цены по данному инструменту)
-                transaction['SPREAD'] = round(minPriceStep, scale)  # Размер защитного спрэда
+                transaction['SPREAD'] = f'{minPriceStep:.{scale}f}'  # Размер защитного спрэда. Переводим в строку, чтобы избежать научной записи числа шага цены. Например, 5e-6 для ВТБ
                 transaction['OFFSET_UNITS'] = 'PRICE_UNITS'  # Единицы измерения отступа в параметрах цены (шаг изменения равен шагу цены по данному инструменту)
-                transaction['OFFSET'] = round(minPriceStep, scale)  # Размер отступа
+                transaction['OFFSET'] = f'{minPriceStep:.{scale}f}'  # Размер отступа. Переводим в строку, чтобы избежать научной записи числа шага цены. Например, 5e-6 для ВТБ
             else:  # Для обычных стоп заявок
                 transaction['PRICE'] = str(limitPrice)  # Лимитная цена исполнения
         else:  # Для рыночных или лимитных заявок
