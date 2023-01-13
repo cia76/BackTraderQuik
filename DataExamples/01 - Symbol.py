@@ -18,17 +18,17 @@ if __name__ == '__main__':  # Точка входа при запуске это
     # 1. Все исторические дневные бары
     # data = store.getdata(dataname=symbol, timeframe=TimeFrame.Days, LiveBars=False)
 
-    # 2. Исторические часовые бары с дожи 4-х цен за период
-    # data = store.getdata(dataname=symbol, timeframe=TimeFrame.Minutes, compression=60, fromdate=datetime(2023, 1, 1), todate=datetime(2023, 1, 13), FourPriceDoji=True, LiveBars=False)
+    # 2. Исторические часовые бары с дожи 4-х цен за год
+    # data = store.getdata(dataname=symbol, timeframe=TimeFrame.Minutes, compression=60, fromdate=datetime(2023, 1, 1), todate=datetime(2023, 12, 31), FourPriceDoji=True, LiveBars=False)
 
     # 3. Исторические 30-и минутные бары с заданной даты до последнего бара
-    # data = store.getdata(dataname=symbol, timeframe=TimeFrame.Minutes, compression=30, fromdate=datetime(2023, 1, 12), LiveBars=False)
+    # data = store.getdata(dataname=symbol, timeframe=TimeFrame.Minutes, compression=30, fromdate=datetime(2023, 1, 9), LiveBars=False)
 
     # 4. Исторические 5-и минутные бары первого часа сессиИ без первой 5-и минутки
     # data = store.getdata(dataname=symbol, timeframe=TimeFrame.Minutes, compression=5, fromdate=datetime(2023, 1, 13, 10, 5), todate=datetime(2023, 1, 13, 10, 55), LiveBars=False)
 
     # 5. Исторические 5-и минутные бары первого часа сессиЙ без первой 5-и минутки
-    # data = store.getdata(dataname=symbol, timeframe=TimeFrame.Minutes, compression=5, fromdate=datetime(2023, 1, 9), todate=datetime(2023, 1, 13), sessionstart=time(10, 5), sessionend=time(11, 0), LiveBars=False)
+    # data = store.getdata(dataname=symbol, timeframe=TimeFrame.Minutes, compression=5, fromdate=datetime(2023, 1, 9), todate=datetime(2023, 1, 14), sessionstart=time(10, 5), sessionend=time(11, 0), LiveBars=False)
 
     # 6. Исторические и новые минутные бары с начала сегодняшней сессии
     data = store.getdata(dataname=symbol, timeframe=TimeFrame.Minutes, compression=1, fromdate=datetime(2023, 1, 13), LiveBars=True)
