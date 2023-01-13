@@ -1,9 +1,9 @@
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, time
 import pytz
 
 from backtrader.feed import AbstractDataBase
-from backtrader import TimeFrame, date2num
 from backtrader.utils.py3 import with_metaclass
+from backtrader import TimeFrame, date2num
 
 from BackTraderQuik import QKStore
 
@@ -37,8 +37,7 @@ class QKData(with_metaclass(MetaQKData, AbstractDataBase)):
         self.store = QKStore(**kwargs)  # Передаем параметры в хранилище QUIK. Может работать самостоятельно, не через хранилище
         self.classCode, self.secCode = self.store.DataNameToClassSecCode(self.p.dataname)  # По тикеру получаем код площадки и код тикера
 
-        self.jsonBars = None  # Все исторические бары
-        self.lastBarId = 0  # Последний номер бара (последний бар может быть еще несформирован)
+        self.jsonBars = []  # Исторические бары после применения фильтров
         self.jsonBar = None  # Текущий бар
         self.barId = 0  # Начинаем загрузку баров в BackTrader с начала (нулевого бара)
         self.newCandleSubscribed = False  # Наличие подписки на получение новых баров
@@ -52,38 +51,44 @@ class QKData(with_metaclass(MetaQKData, AbstractDataBase)):
     def start(self):
         super(QKData, self).start()
         if self.p.tz is None:  # Если временнАя зона не указана
-            self.p.tz = QKStore.MarketTimeZone  # то берем московское время биржи
-        # HACK Хоть мы и задаем временнУю зону биржи, но параметры fromdate и todate переводятся в GMT
-        # Поэтому, считаем, что время задается в GMT, переводим его во время биржи и удаляем временнУю зону
+            self.p.tz = self.store.MarketTimeZone  # то берем московское время биржи
+        # HACK В BackTrader параметры fromdate и todate нужно задавать в GMT. Далее они будут переведены во время биржи
+        # Если хотим задавать интервал не в GMT, а по времени работы биржи, то нужно выполнить преобразования:
         if self.p.fromdate is not None:  # Если задана дата начала получения исторических данных
-            dt = self.p.fromdate = pytz.utc.localize(self.p.fromdate).astimezone(self.p.tz)
-            self.p.fromdate = dt.replace(tzinfo=None)
+            dt = self.p.fromdate = pytz.utc.localize(self.p.fromdate).astimezone(self.p.tz)  # Время берем в GMT, переводим его во время биржи
+            self.p.fromdate = dt.replace(tzinfo=None)  # и удаляем временнУю зону
         if self.p.todate is not None:  # Если задана дата окончания получения исторических данных
-            dt = self.p.todate = pytz.utc.localize(self.p.todate).astimezone(self.p.tz)
-            self.p.todate = dt.replace(tzinfo=None)
-        if self.p.sessionstart is None:  # Если время начала сессии не указано
-            self.p.sessionstart = datetime.time(10, 00)  # то берем время начала сессии на бирже
-        if self.p.sessionend is None:  # Если время окончания сессии не указано
-            self.p.sessionend = datetime.time(23, 50)  # то берем время окончания сессии на бирже
+            dt = self.p.todate = pytz.utc.localize(self.p.todate).astimezone(self.p.tz)  # Время берем в GMT, переводим его во время биржи
+            self.p.todate = dt.replace(tzinfo=None)  # и удаляем временнУю зону
         self.put_notification(self.DELAYED)  # Отправляем уведомление об отправке исторических (не новых) баров
-        self.jsonBars = self.store.qpProvider.GetCandlesFromDataSource(self.classCode, self.secCode, self.interval, 0)['data']  # Получаем все бары из QUIK
-        barsCount = len(self.jsonBars)  # Кол-во полученных баров
-        if barsCount == 0:  # Если бары не получены
-            self.put_notification(self.DISCONNECTED)  # то отправляем уведомление о невозможности отправки исторических баров
-            return  # выходим, дальше не продолжаем
-        self.put_notification(self.CONNECTED)  # Отправляем уведомление об успешном подключении
-        self.lastBarId = barsCount - 1  # Последний номер бара
-        jsonDateTime = self.jsonBars[self.lastBarId]['datetime']  # Вытаскиваем составное значение даты и времени открытия бара
-        dt = datetime(jsonDateTime['year'], jsonDateTime['month'], jsonDateTime['day'], jsonDateTime['hour'], jsonDateTime['min'])  # Время открытия бара
-        timeOpen = self.p.tz.localize(dt)  # Биржевое время открытия бара
-        timeClose = timeOpen + timedelta(minutes=self.interval)  # Биржевое время закрытия бара
-        timeMarketNow = datetime.now(self.p.tz)  # Берем текущее время на рынке из локального
-        if timeClose > timeMarketNow and timeMarketNow.time() < self.p.sessionend:  # Если время закрытия бара еще не наступило на бирже, и сессия еще не закончилась
-            self.lastBarId -= 1  # то последний бар из истории не принимаем
+        jsonBars = self.store.qpProvider.GetCandlesFromDataSource(self.classCode, self.secCode, self.interval, 0)['data']  # Получаем все бары из QUIK
+        for bar in jsonBars:  # Пробегаемся по всем полученным барам из QUIK
+            if self.IsBarValid(bar, False):  # Если исторический бар соответствует всем условиям выборки
+                self.jsonBars.append(bar)  # то добавляем бар
+        if len(self.jsonBars) > 0:  # Если был получен хотя бы 1 бар
+            self.put_notification(self.CONNECTED)  # то отправляем уведомление о подключении и начале получения исторических баров
 
     def _load(self):
         """Загружаем бар из истории или новый бар в BackTrader"""
-        if self.newCandleSubscribed:  # Если получаем новые бары по подписке
+
+        if not self.newCandleSubscribed:  # Если получаем исторические данные
+            if len(self.jsonBars) == 0:  # Если исторических данных нет
+                self.put_notification(self.DISCONNECTED)  # Отправляем уведомление об окончании получения исторических баров
+                return False  # Больше сюда заходить не будем
+            if self.barId < len(self.jsonBars):  # Если еще не получили все бары из истории
+                self.jsonBar = self.jsonBars[self.barId]  # Получаем текущий бар из истории
+                self.barId += 1  # Перемещаем указатель на следующий бар
+            else:  # Если получили все бары из истории
+                self.put_notification(self.DISCONNECTED)  # Отправляем уведомление об окончании получения исторических баров
+                if not self.p.LiveBars:  # Если новые бары не принимаем
+                    return False  # Больше сюда заходить не будем
+                if not self.store.qpProvider.IsSubscribed(self.classCode, self.secCode, self.interval)['data']:  # Если не было подписки на тикер/интервал
+                    self.store.qpProvider.SubscribeToCandles(self.classCode, self.secCode, self.interval)  # Подписываемся на новые бары
+                    self.store.subscribedSymbols.append({'class': self.classCode, 'sec': self.secCode, 'interval': self.interval})  # Добавляем в список подписанных тикеров/интервалов
+                    print(f'Подписка {self.classCode}.{self.secCode} на интервале {self.interval}')
+                self.newCandleSubscribed = True  # Дальше будем получать новые бары по подписке
+                return None  # Будем заходить еще
+        else:  # Если получаем новые бары по подписке
             if len(self.store.newBars) == 0:  # Если в хранилище никаких новых баров нет
                 return None  # то нового бара нет, будем заходить еще
             newBars = [newBar for newBar in self.store.newBars  # Смотрим в хранилище новых баров
@@ -92,57 +97,32 @@ class QKData(with_metaclass(MetaQKData, AbstractDataBase)):
                        int(newBar['interval']) == self.interval]  # и интервалом
             if len(newBars) == 0:  # Если новый бар еще не появился
                 return None  # то нового бара нет, будем заходить еще
-            self.jsonBar = newBars[0]  # Берем первый бар из выборки, с ним будем работать
+            self.jsonBar = newBars[0]  # Получаем текущий (первый) бар из выборки, с ним будем работать
             self.store.newBars.remove(self.jsonBar)  # Убираем его из хранилища новых баров
+            if not self.IsBarValid(self.jsonBar, True):  # Если бар по подписке не соответствует всем условиям выборки
+                return None  # то нового бара нет, будем заходить еще
             jsonDateTime = self.jsonBar['datetime']  # Вытаскиваем составное значение даты и времени открытия бара
-            dt = datetime(jsonDateTime['year'], jsonDateTime['month'], jsonDateTime['day'], jsonDateTime['hour'], jsonDateTime['min'])  # Время открытия бара
-            if date2num(dt) <= self.lines.datetime[-1]:  # Если получили предыдущий или более старый бар
-                return None  # то нового бара нет, будем заходить еще
-            dtMarketBarClose = dt + timedelta(minutes=self.interval)  # Биржевое время закрытия бара
-            dtMarketNow = self.GetQUIKDateTimeNow() + timedelta(seconds=3)  # Текущее биржевое время из QUIK. Корректируем его на несколько секунд, т.к. минутный бар может прийти в 59 секунд прошлой минуты
-            if dtMarketBarClose > dtMarketNow:  # Если получили несформированный бар. Например, дневной бар в середине сессии
-                return None  # то нового бара нет, будем заходить еще
-            dtMarketNextBarClose = dt + timedelta(minutes=self.interval * 2)  # Биржевое время закрытия следующего бара
-            dtMarketNow = self.GetQUIKDateTimeNow()  # Текущее биржевое время из QUIK
+            dtOpen = datetime(jsonDateTime['year'], jsonDateTime['month'], jsonDateTime['day'], jsonDateTime['hour'], jsonDateTime['min'])  # Время открытия бара
+            dtNextBarClose = dtOpen + timedelta(minutes=self.interval * 2)  # Биржевое время закрытия следующего бара
+            timeMarketNow = self.GetQUIKDateTimeNow()  # Текущее биржевое время из QUIK
             # Переходим в режим получения новых баров (LIVE), если не находимся в этом режиме и
             # следующий бар закроется в будущем (т.к. пришедший бар закрылся в прошлом), или пришел последний бар предыдущей сессии
-            if not self.liveMode and (dtMarketNextBarClose > dtMarketNow or dt.day != dtMarketNow.day):
+            if not self.liveMode and (dtNextBarClose > timeMarketNow or dtOpen.day != timeMarketNow.day):
                 self.put_notification(self.LIVE)  # Отправляем уведомление о получении новых баров
                 self.liveMode = True  # Переходим в режим получения новых баров (LIVE)
             # Бывает ситуация, когда QUIK несколько минут не передает новые бары. Затем передает все пропущенные
             # Чтобы не совершать сделки на истории, меняем режим торгов на историю до прихода нового бара
-            elif self.liveMode and dtMarketNextBarClose <= dtMarketNow:  # Если в режиме получения новых баров, и следующий бар закроется до текущего времени на бирже
+            elif self.liveMode and dtNextBarClose <= timeMarketNow:  # Если в режиме получения новых баров, и следующий бар закроется до текущего времени на бирже
                 self.put_notification(self.DELAYED)  # Отправляем уведомление об отправке исторических (не новых) баров
                 self.liveMode = False  # Переходим в режим получения истории
-        else:  # Если получаем исторические данные
-            if len(self.jsonBars) == 0:  # Если исторических данных нет (QUIK отключен от сервера брокера)
-                self.put_notification(self.DISCONNECTED)  # Отправляем уведомление об окончании получения исторических баров
-                return False  # Больше сюда заходить не будем
-            if self.barId > self.lastBarId:  # Если получили все бары из истории
-                self.put_notification(self.DISCONNECTED)  # Отправляем уведомление об окончании получения исторических баров
-                if not self.p.LiveBars:  # Если новые бары не принимаем
-                    return False  # Больше сюда заходить не будем
-                # Принимаем новые бары
-                if not self.store.qpProvider.IsSubscribed(self.classCode, self.secCode, self.interval)['data']:  # Если не было подписки на тикер/интервал
-                    self.store.qpProvider.SubscribeToCandles(self.classCode, self.secCode, self.interval)  # Подписываемся на новые бары
-                    self.store.subscribedSymbols.append({'class': self.classCode, 'sec': self.secCode, 'interval': self.interval})  # Добавляем в список подписанных тикеров/интервалов
-                    print(f'Подписка {self.classCode}.{self.secCode} на интервале {self.interval}')
-                self.newCandleSubscribed = True  # Дальше будем получать новые бары по подписке
-                return None  # Будем заходить еще
-            else:  # Если еще не получили все бары из истории
-                self.jsonBar = self.jsonBars[self.barId]  # Получаем текущий бар из истории
-                self.barId += 1  # Перемещаем указатель на следующий бар
-        # Записываем полученный исторический / новый бар
+
+        # Все проверки пройдены. Записываем полученный исторический/новый бар
         jsonDateTime = self.jsonBar['datetime']  # Вытаскиваем составное значение даты и времени открытия бара
-        dt = datetime(jsonDateTime['year'], jsonDateTime['month'], jsonDateTime['day'], jsonDateTime['hour'], jsonDateTime['min'])  # Время открытия бара
-        h = self.store.QKToBTPrice(self.classCode, self.secCode, self.jsonBar['high'])  # High
-        l = self.store.QKToBTPrice(self.classCode, self.secCode, self.jsonBar['low'])  # Low
-        if not self.p.FourPriceDoji and h == l:  # Если не пропускаем дожи 4-х цен, но такой бар пришел
-            return None  # то нового бара нет, будем заходить еще
-        self.lines.datetime[0] = date2num(dt)  # Переводим в формат хранения даты/времени в BackTrader
+        dtOpen = datetime(jsonDateTime['year'], jsonDateTime['month'], jsonDateTime['day'], jsonDateTime['hour'], jsonDateTime['min'])  # Время открытия бара
+        self.lines.datetime[0] = date2num(dtOpen)  # Переводим в формат хранения даты/времени в BackTrader
         self.lines.open[0] = self.store.QKToBTPrice(self.classCode, self.secCode, self.jsonBar['open'])  # Open
-        self.lines.high[0] = h  # High
-        self.lines.low[0] = l  # Low
+        self.lines.high[0] = self.store.QKToBTPrice(self.classCode, self.secCode, self.jsonBar['high'])  # High
+        self.lines.low[0] = self.store.QKToBTPrice(self.classCode, self.secCode, self.jsonBar['low'])  # Low
         self.lines.close[0] = self.store.QKToBTPrice(self.classCode, self.secCode,  self.jsonBar['close'])  # Close
         self.lines.volume[0] = self.jsonBar['volume']  # Volume
         self.lines.openinterest[0] = 0  # Открытый интерес в QUIK не учитывается
@@ -154,6 +134,30 @@ class QKData(with_metaclass(MetaQKData, AbstractDataBase)):
             self.put_notification(self.DISCONNECTED)  # Отправляем уведомление об окончании получения новых баров
             self.store.qpProvider.UnsubscribeFromCandles(self.classCode, self.secCode, self.interval)  # Отменяем подписку на новые бары
         self.store.DataCls = None  # Удаляем класс данных в хранилище
+
+    def IsBarValid(self, bar, live):
+        """Проверка бара на соответствие условиям выборки"""
+        jsonDateTime = bar['datetime']  # Вытаскиваем составное значение даты и времени открытия бара
+        dtOpen = datetime(jsonDateTime['year'], jsonDateTime['month'], jsonDateTime['day'], jsonDateTime['hour'], jsonDateTime['min'])  # Время открытия бара
+        if self.p.sessionstart != time.min and dtOpen.time() < self.p.sessionstart:  # Если задано время начала сессии и открытие бара до этого времени
+            return False  # то бар не соответствует условиям выборки
+        dtClose = dtOpen + timedelta(minutes=self.interval)  # Время закрытия бара
+        if self.p.sessionend != time(23, 59, 59, 999990) and dtClose.time() > self.p.sessionend:  # Если задано время окончания сессии и закрытие бара после этого времени
+            return False  # то бар не соответствует условиям выборки
+        h = self.store.QKToBTPrice(self.classCode, self.secCode, bar['high'])  # High
+        l = self.store.QKToBTPrice(self.classCode, self.secCode, bar['low'])  # Low
+        if not self.p.FourPriceDoji and h == l:  # Если не пропускаем дожи 4-х цен, но такой бар пришел
+            return False  # то бар не соответствует условиям выборки
+        if not live:  # Если получаем исторические данные
+            timeClose = self.p.tz.localize(dtClose)  # Биржевое время закрытия бара
+            timeMarketNow = datetime.now(self.p.tz)  # Текущее биржевое время из текущего локального времени
+            if timeClose > timeMarketNow and timeMarketNow.time() < self.p.sessionend:  # Если время закрытия бара еще не наступило на бирже, и сессия еще не закончилась
+                return False  # то бар не соответствует условиям выборки
+        else:  # Если получаем новые бары по подписке
+            timeMarketNow = self.GetQUIKDateTimeNow() + timedelta(seconds=3)  # Текущее биржевое время из QUIK. Корректируем его на несколько секунд, т.к. минутный бар может прийти в 59 секунд прошлой минуты
+            if dtClose > timeMarketNow:  # Если получили несформированный бар. Например, дневной бар в середине сессии
+                return False  # то бар не соответствует условиям выборки
+        return True  # В остальных случаях бар соответствуем условиям выборки
 
     def GetQUIKDateTimeNow(self):
         """Текущая дата и время МСК в QUIK"""
@@ -168,7 +172,7 @@ class QKData(with_metaclass(MetaQKData, AbstractDataBase)):
         if jsonData['class'] != self.classCode or jsonData['sec'] != self.secCode or int(jsonData['interval'] != self.interval):  # Если бар по другому тикеру / временнОму интервалу
             return  # то выходим, дальше не продолжаем
         jsonDateTime = jsonData['datetime']  # Вытаскиваем составное значение даты и времени начала бара
-        dt = datetime(jsonDateTime['year'], jsonDateTime['month'], jsonDateTime['day'], jsonDateTime['hour'], jsonDateTime['min'])  # Переводим в формат datetime
-        if date2num(dt) <= self.lines.datetime[-1]:  # Если получили предыдущий или более старый бар
+        dtOpen = datetime(jsonDateTime['year'], jsonDateTime['month'], jsonDateTime['day'], jsonDateTime['hour'], jsonDateTime['min'])  # Переводим в формат datetime
+        if date2num(dtOpen) <= self.lines.datetime[-1]:  # Если получили предыдущий или более старый бар
             return   # то выходим, дальше не продолжаем
         self.jsonBar = jsonData  # Новый бар получен

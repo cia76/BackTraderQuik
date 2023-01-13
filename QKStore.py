@@ -1,6 +1,6 @@
 import collections
-from datetime import datetime, date
-from pytz import timezone
+from datetime import datetime, date, time
+from pytz import timezone, utc
 
 from backtrader.metabase import MetaParams
 from backtrader.utils.py3 import with_metaclass
@@ -52,7 +52,7 @@ class QKStore(with_metaclass(MetaSingleton, object)):
         super(QKStore, self).__init__()
         self.notifs = collections.deque()  # Уведомления хранилища
         self.isConnected = True  # Считаем, что изначально QUIK подключен к серверу брокера
-        self.qpProvider = QuikPy(Host=self.p.Host, RequestsPort=self.p.RequestsPort, CallbacksPort=self.p.CallbacksPort)  # Вызываем конструктор QuikPy с адресом хоста и портами по умолчанию
+        self.qpProvider = QuikPy(Host=self.p.Host, RequestsPort=self.p.RequestsPort, CallbacksPort=self.p.CallbacksPort)  # Вызываем конструктор QuikPy с адресом хоста и портами
         self.classCodes = self.qpProvider.GetClassesList()['data']  # Список классов. В некоторых таблицах тикер указывается без кода класса
         self.subscribedSymbols = []  # Список подписанных тикеров/интервалов
         self.securityInfoList = []  # Кэш параметров тикеров
@@ -78,7 +78,7 @@ class QKStore(with_metaclass(MetaSingleton, object)):
         self.qpProvider.OnNewCandle = self.qpProvider.DefaultHandler  # Возвращаем обработчик по умолчанию
         self.qpProvider.CloseConnectionAndThread()  # Закрываем соединение для запросов и поток обработки функций обратного вызова
 
-    # Функции конвертации
+    # Конвертация
 
     def DataNameToClassSecCode(self, dataname):
         """Код площадки и код тикера из названия тикера (с кодом площадки или без него)"""
@@ -150,7 +150,7 @@ class QKStore(with_metaclass(MetaSingleton, object)):
                 return Price / securityLot  # то цену делим на лот
         return Price  # В остальных случаях цена не изменяется
 
-    # QKBroker: Функции
+    # QKBroker
 
     def GetPositions(self, ClientCode, FirmId, LimitKind, Lots, IsFutures=False):
         """
@@ -382,7 +382,8 @@ class QKStore(with_metaclass(MetaSingleton, object)):
         print(f'{dt.strftime("%d.%m.%Y %H:%M")}, QUIK Disconnected')
         self.isConnected = False  # QUIK отключен от сервера брокера
 
-    # QKData: Обработка событий получения новых баров
+    # QKData
 
     def OnNewCandle(self, data):
+        """Обработка событий получения новых баров"""
         self.newBars.append(data['data'])  # Добавляем новый бар в список новых баров
