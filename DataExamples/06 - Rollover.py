@@ -1,19 +1,22 @@
-from backtrader import Cerebro, TimeFrame
+from datetime import time, datetime
+from backtrader import Cerebro, feeds, TimeFrame
 from BackTraderQuik.QKStore import QKStore  # Хранилище QUIK
 import Strategy as ts  # Торговые системы
 
+# Склейка тикера из файла и истории (Rollover)
 if __name__ == '__main__':  # Точка входа при запуске этого скрипта
-    cerebro = Cerebro()  # Инициируем "движок" BackTrader
-
-    # Склейка фьючерсов (Rollover)
-    symbols = ['SPBFUT.SiH9', 'SPBFUT.SiM9', 'SPBFUT.SiU9', 'SPBFUT.SiZ9',
-    'SPBFUT.SiH0', 'SPBFUT.SiM0', 'SPBFUT.SiU0', 'SPBFUT.SiZ0',
-    'SPBFUT.SiH1', 'SPBFUT.SiM1', 'SPBFUT.SiU1', 'SPBFUT.SiZ1']  # Тикеры для склейки
-    store = QKStore()  # Хранилище QUIK (QUIK на локальном компьютере)
-    # store = QKStore(Host='<Ваш IP адрес>')  # Хранилище QUIK (К QUIK на удаленном компьютере обращаемся по IP или названию)
-    data = [store.getdata(dataname=symbol, timeframe=TimeFrame.Minutes, compression=5) for symbol in symbols]  # Получаем по ним исторические данные
-    cerebro.rolloverdata(name='Si', *data, checkdate=True, checkcondition=True)  # Склеенный тикер
+    symbol = 'TQBR.SBER'  # Тикер истории QUIK
+    d1 = feeds.GenericCSVData(  # Получаем историю из файла
+        dataname=f'..\\..\\Data\\{symbol}_D1.txt',  # Файл для импорта из QUIK. Создается из примера QuikPy 04 - Bars.py
+        separator='\t',  # Колонки разделены табуляцией
+        dtformat='%d.%m.%Y %H:%M',  # Формат даты/времени DD.MM.YYYY HH:MI
+        openinterest=-1,  # Открытого интереса в файле нет
+        sessionend=time(0, 0),  # Для дневных данных и выше подставляется время окончания сессии. Чтобы совпадало с историей, нужно поставить закрытие на 00:00
+        fromdate=datetime(2020, 1, 1))  # Начальная дата и время приема исторических данных (Входит)
+    store = QKStore()  # Хранилище QUIK
+    d2 = store.getdata(dataname=symbol, timeframe=TimeFrame.Days, fromdate=datetime(2022, 12, 1), LiveBars=False)  # Получаем историю из QUIK
+    cerebro = Cerebro(stdstats=False)  # Инициируем "движок" BackTrader. Стандартная статистика сделок и кривой доходности не нужна
+    cerebro.rolloverdata(d1, d2, name=symbol)  # Склеенный тикер
     cerebro.addstrategy(ts.PrintStatusAndBars)  # Добавляем торговую систему
-
     cerebro.run()  # Запуск торговой системы
-    cerebro.plot()  # Рисуем график. Требуется matplotlib версии 3.2.2 (pip install matplotlib==3.2.2)
+    cerebro.plot()  # Рисуем график

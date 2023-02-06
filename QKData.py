@@ -34,7 +34,7 @@ class QKData(with_metaclass(MetaQKData, AbstractDataBase)):
             self.interval = 23200  # В минутах
 
         self.store = QKStore(**kwargs)  # Передаем параметры в хранилище QUIK. Может работать самостоятельно, не через хранилище
-        self.classCode, self.secCode = self.store.DataNameToClassSecCode(self.p.dataname)  # По тикеру получаем код площадки и код тикера
+        self.classCode, self.secCode = self.store.data_name_to_class_sec_code(self.p.dataname)  # По тикеру получаем код площадки и код тикера
 
         self.jsonBars = []  # Исторические бары после применения фильтров
         self.newCandleSubscribed = False  # Наличие подписки на получение новых баров
@@ -48,9 +48,9 @@ class QKData(with_metaclass(MetaQKData, AbstractDataBase)):
     def start(self):
         super(QKData, self).start()
         self.put_notification(self.DELAYED)  # Отправляем уведомление об отправке исторических (не новых) баров
-        jsonBars = self.store.qpProvider.GetCandlesFromDataSource(self.classCode, self.secCode, self.interval, 0)['data']  # Получаем все бары из QUIK
-        for bar in jsonBars:  # Пробегаемся по всем полученным барам из QUIK
-            if self.IsBarValid(bar, False):  # Если исторический бар соответствует всем условиям выборки
+        json_bars = self.store.qpProvider.GetCandlesFromDataSource(self.classCode, self.secCode, self.interval, 0)['data']  # Получаем все бары из QUIK
+        for bar in json_bars:  # Пробегаемся по всем полученным барам из QUIK
+            if self.is_bar_valid(bar, False):  # Если исторический бар соответствует всем условиям выборки
                 self.jsonBars.append(bar)  # то добавляем бар
         if len(self.jsonBars) > 0:  # Если был получен хотя бы 1 бар
             self.put_notification(self.CONNECTED)  # то отправляем уведомление о подключении и начале получения исторических баров
@@ -73,36 +73,35 @@ class QKData(with_metaclass(MetaQKData, AbstractDataBase)):
         else:  # Если получаем новые бары по подписке
             if len(self.store.newBars) == 0:  # Если в хранилище никаких новых баров нет
                 return None  # то нового бара нет, будем заходить еще
-            newBars = [newBar for newBar in self.store.newBars  # Смотрим в хранилище новых баров
-                       if newBar['class'] == self.classCode and  # бары с нужным кодом площадки,
-                       newBar['sec'] == self.secCode and  # тикером,
-                       int(newBar['interval']) == self.interval]  # и интервалом
-            if len(newBars) == 0:  # Если новый бар еще не появился
+            new_bars = [newBar for newBar in self.store.newBars  # Смотрим в хранилище новых баров
+                        if newBar['class'] == self.classCode and  # бары с нужным кодом площадки,
+                        newBar['sec'] == self.secCode and  # тикером,
+                        int(newBar['interval']) == self.interval]  # и интервалом
+            if len(new_bars) == 0:  # Если новый бар еще не появился
                 return None  # то нового бара нет, будем заходить еще
-            bar = newBars[0]  # Получаем текущий (первый) бар из выборки, с ним будем работать
+            bar = new_bars[0]  # Получаем текущий (первый) бар из выборки, с ним будем работать
             self.store.newBars.remove(bar)  # Убираем его из хранилища новых баров
-            if not self.IsBarValid(bar, True):  # Если бар по подписке не соответствует всем условиям выборки
+            if not self.is_bar_valid(bar, True):  # Если бар по подписке не соответствует всем условиям выборки
                 return None  # то нового бара нет, будем заходить еще
-            dtOpen = self.GetBarOpenDateTime(bar)  # Дата/время открытия бара
-            dtNextBarClose = self.GetBarCloseDateTime(dtOpen, 2)  # Биржевое время закрытия следующего бара
-            timeMarketNow = self.GetQUIKDateTimeNow()  # Текущее биржевое время из QUIK
+            dt_open = self.get_bar_open_date_time(bar)  # Дата/время открытия бара
+            dt_next_bar_close = self.get_bar_close_date_time(dt_open, 2)  # Биржевое время закрытия следующего бара
+            time_market_now = self.get_quik_date_time_now()  # Текущее биржевое время из QUIK
             # Переходим в режим получения новых баров (LIVE), если не находимся в этом режиме и
             # следующий бар закроется в будущем (т.к. пришедший бар закрылся в прошлом), или пришел последний бар предыдущей сессии
-            if not self.liveMode and (dtNextBarClose > timeMarketNow or dtOpen.day != timeMarketNow.day):
+            if not self.liveMode and (dt_next_bar_close > time_market_now or dt_open.day != time_market_now.day):
                 self.put_notification(self.LIVE)  # Отправляем уведомление о получении новых баров
                 self.liveMode = True  # Переходим в режим получения новых баров (LIVE)
             # Бывает ситуация, когда QUIK несколько минут не передает новые бары. Затем передает все пропущенные
             # Чтобы не совершать сделки на истории, меняем режим торгов на историю до прихода нового бара
-            elif self.liveMode and dtNextBarClose <= timeMarketNow:  # Если в режиме получения новых баров, и следующий бар закроется до текущего времени на бирже
+            elif self.liveMode and dt_next_bar_close <= time_market_now:  # Если в режиме получения новых баров, и следующий бар закроется до текущего времени на бирже
                 self.put_notification(self.DELAYED)  # Отправляем уведомление об отправке исторических (не новых) баров
                 self.liveMode = False  # Переходим в режим получения истории
-
         # Все проверки пройдены. Записываем полученный исторический/новый бар
-        self.lines.datetime[0] = date2num(self.GetBarOpenDateTime(bar))  # Переводим в формат хранения даты/времени в BackTrader
-        self.lines.open[0] = self.store.QKToBTPrice(self.classCode, self.secCode, bar['open'])  # Open
-        self.lines.high[0] = self.store.QKToBTPrice(self.classCode, self.secCode, bar['high'])  # High
-        self.lines.low[0] = self.store.QKToBTPrice(self.classCode, self.secCode, bar['low'])  # Low
-        self.lines.close[0] = self.store.QKToBTPrice(self.classCode, self.secCode,  bar['close'])  # Close
+        self.lines.datetime[0] = date2num(self.get_bar_open_date_time(bar))  # Переводим в формат хранения даты/времени в BackTrader
+        self.lines.open[0] = self.store.quik_to_bt_price(self.classCode, self.secCode, bar['open'])  # Open
+        self.lines.high[0] = self.store.quik_to_bt_price(self.classCode, self.secCode, bar['high'])  # High
+        self.lines.low[0] = self.store.quik_to_bt_price(self.classCode, self.secCode, bar['low'])  # Low
+        self.lines.close[0] = self.store.quik_to_bt_price(self.classCode, self.secCode, bar['close'])  # Close
         self.lines.volume[0] = bar['volume']  # Volume
         self.lines.openinterest[0] = 0  # Открытый интерес в QUIK не учитывается
         return True  # Будем заходить сюда еще
@@ -114,41 +113,44 @@ class QKData(with_metaclass(MetaQKData, AbstractDataBase)):
             self.put_notification(self.DISCONNECTED)  # Отправляем уведомление об окончании получения новых баров
         self.store.DataCls = None  # Удаляем класс данных в хранилище
 
-    def IsBarValid(self, bar, live):
+    # Функции
+
+    def is_bar_valid(self, bar, live):
         """Проверка бара на соответствие условиям выборки"""
-        dtOpen = self.GetBarOpenDateTime(bar)  # Дата/время открытия бара
-        if self.p.sessionstart != time.min and dtOpen.time() < self.p.sessionstart:  # Если задано время начала сессии и открытие бара до этого времени
+        dt_open = self.get_bar_open_date_time(bar)  # Дата/время открытия бара
+        if self.p.sessionstart != time.min and dt_open.time() < self.p.sessionstart:  # Если задано время начала сессии и открытие бара до этого времени
             return False  # то бар не соответствует условиям выборки
-        dtClose = self.GetBarCloseDateTime(dtOpen)  # Дата/время закрытия бара
-        if self.p.sessionend != time(23, 59, 59, 999990) and dtClose.time() > self.p.sessionend:  # Если задано время окончания сессии и закрытие бара после этого времени
+        dt_close = self.get_bar_close_date_time(dt_open)  # Дата/время закрытия бара
+        if self.p.sessionend != time(23, 59, 59, 999990) and dt_close.time() > self.p.sessionend:  # Если задано время окончания сессии и закрытие бара после этого времени
             return False  # то бар не соответствует условиям выборки
-        h = self.store.QKToBTPrice(self.classCode, self.secCode, bar['high'])  # High
-        l = self.store.QKToBTPrice(self.classCode, self.secCode, bar['low'])  # Low
-        if not self.p.FourPriceDoji and h == l:  # Если не пропускаем дожи 4-х цен, но такой бар пришел
+        high = self.store.quik_to_bt_price(self.classCode, self.secCode, bar['high'])  # High
+        low = self.store.quik_to_bt_price(self.classCode, self.secCode, bar['low'])  # Low
+        if not self.p.FourPriceDoji and high == low:  # Если не пропускаем дожи 4-х цен, но такой бар пришел
             return False  # то бар не соответствует условиям выборки
-        timeMarketNow = self.GetQUIKDateTimeNow()  # Текущее биржевое время
+        time_market_now = self.get_quik_date_time_now()  # Текущее биржевое время
         if not live:  # Если получаем исторические данные
-            if dtClose > timeMarketNow and timeMarketNow.time() < self.p.sessionend:  # Если время закрытия бара еще не наступило на бирже, и сессия еще не закончилась
+            if dt_close > time_market_now and time_market_now.time() < self.p.sessionend:  # Если время закрытия бара еще не наступило на бирже, и сессия еще не закончилась
                 return False  # то бар не соответствует условиям выборки
         else:  # Если получаем новые бары по подписке
-            if date2num(dtOpen) <= self.lines.datetime[-1]:  # Если получили предыдущий или более старый бар
+            if date2num(dt_open) <= self.lines.datetime[-1]:  # Если получили предыдущий или более старый бар
                 return False  # то выходим, дальше не продолжаем
-            timeMarketNow += timedelta(seconds=3)  # Текущее биржевое время из QUIK. Корректируем его на несколько секунд, т.к. минутный бар может прийти в 59 секунд прошлой минуты
-            if dtClose > timeMarketNow:  # Если получили несформированный бар. Например, дневной бар в середине сессии
+            time_market_now += timedelta(seconds=3)  # Текущее биржевое время из QUIK. Корректируем его на несколько секунд, т.к. минутный бар может прийти в 59 секунд прошлой минуты
+            if dt_close > time_market_now:  # Если получили несформированный бар. Например, дневной бар в середине сессии
                 return False  # то бар не соответствует условиям выборки
         return True  # В остальных случаях бар соответствуем условиям выборки
 
-    def GetBarOpenDateTime(self, bar):
+    @staticmethod
+    def get_bar_open_date_time(bar):
         """Дата/время открытия бара"""
-        jsonDateTime = bar['datetime']  # Получаем составное значение даты и времени открытия бара
-        return datetime(jsonDateTime['year'], jsonDateTime['month'], jsonDateTime['day'], jsonDateTime['hour'], jsonDateTime['min'])  # Время открытия бара
+        dt_json = bar['datetime']  # Получаем составное значение даты и времени открытия бара
+        return datetime(dt_json['year'], dt_json['month'], dt_json['day'], dt_json['hour'], dt_json['min'])  # Время открытия бара
 
-    def GetBarCloseDateTime(self, dtOpen, period=1):
+    def get_bar_close_date_time(self, dt_open, period=1):
         """Дата/время закрытия бара"""
-        return dtOpen + timedelta(minutes=self.interval*period)  # Время закрытия бара
+        return dt_open + timedelta(minutes=self.interval * period)  # Время закрытия бара
 
-    def GetQUIKDateTimeNow(self):
-        """Текущая дата и время МСК"""
+    def get_quik_date_time_now(self):
+        """Текущая дата и время из QUIK (МСК)"""
         if not self.liveMode:  # Если не находимся в режиме получения новых баров
             return datetime.now(self.store.MarketTimeZone).replace(tzinfo=None)  # То время МСК получаем из локального времени
         d = self.store.qpProvider.GetInfoParam('TRADEDATE')['data']  # Дата на сервере в виде строки dd.mm.yyyy

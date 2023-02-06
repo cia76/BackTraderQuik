@@ -16,7 +16,7 @@ class OCO(bt.Strategy):
 
     def log(self, txt, dt=None):
         """Вывод строки с датой на консоль"""
-        dt = bt.num2date(self.datas[0].datetime[0]) if dt is None else dt  # Заданная дата или дата текущего бара
+        dt = bt.num2date(self.datas[0].datetime[0]) if not dt else dt  # Заданная дата или дата текущего бара
         print(f'{dt.strftime("%d.%m.%Y %H:%M")}, {txt}')  # Выводим дату и время с заданным текстом на консоль
 
     def __init__(self):
@@ -33,18 +33,18 @@ class OCO(bt.Strategy):
         if not self.position:  # Если позиции нет
             if self.order and self.order.status == bt.Order.Accepted:  # Если заявка не исполнена (принята брокером)
                 self.cancel(self.order)  # то снимаем ее
-            closeMinusN = self.data.close[0] * (1 - self.p.LimitPct / 100)  # На n% ниже цены закрытия
-            self.order = self.buy(exectype=bt.Order.Limit, price=closeMinusN)  # Лимитная заявка на покупку
-            closePlusN = self.data.close[0] * (1 + self.p.LimitPct / 100)  # На n% выше цены закрытия
-            self.sell(exectype=bt.Order.Limit, price=closePlusN, oco=self.order)  # Зависимая лимитная заявка на короткую продажу
+            close_minus_n = self.data.close[0] * (1 - self.p.LimitPct / 100)  # На n% ниже цены закрытия
+            self.order = self.buy(exectype=bt.Order.Limit, price=close_minus_n)  # Лимитная заявка на покупку
+            close_plus_n = self.data.close[0] * (1 + self.p.LimitPct / 100)  # На n% выше цены закрытия
+            self.sell(exectype=bt.Order.Limit, price=close_plus_n, oco=self.order)  # Зависимая лимитная заявка на короткую продажу
         else:  # Если позиция есть
             self.order = self.close()  # Заявка на закрытие позиции по рыночной цене
 
     def notify_data(self, data, status, *args, **kwargs):
         """Изменение статуса приходящих баров"""
-        dataStatus = data._getstatusname(status)  # Получаем статус (только при LiveBars=True)
-        print(dataStatus)  # Не можем вывести в лог, т.к. первый статус DELAYED получаем до первого бара (и его даты)
-        self.isLive = dataStatus == 'LIVE'  # Режим реальной торговли
+        data_status = data._getstatusname(status)  # Получаем статус (только при LiveBars=True)
+        print(data_status)  # Не можем вывести в лог, т.к. первый статус DELAYED получаем до первого бара (и его даты)
+        self.isLive = data_status == 'LIVE'  # Режим реальной торговли
 
     def notify_order(self, order):
         """Изменение статуса заявки"""
@@ -72,17 +72,16 @@ if __name__ == '__main__':  # Точка входа при запуске это
 
     clientCode = '<Ваш код клиента>'  # Код клиента (присваивается брокером)
     firmId = '<Код фирмы>'  # Код фирмы (присваивается брокером)
-    # symbol = 'TQBR.GAZP'
-    symbol = 'SPBFUT.SiH2'
+    # symbol = 'TQBR.SBER'  # Тикер
+    symbol = 'SPBFUT.SiH3'  # Для фьючерсов: <Код тикера><Месяц экспирации: 3-H, 6-M, 9-U, 12-Z><Последняя цифра года>
 
     cerebro.addstrategy(OCO, LimitPct=1)  # Добавляем торговую систему с лимитным входом в n%
-    store = QKStore()  # Хранилище QUIK (QUIK на локальном компьютере)
-    # store = QKStore(Host='<Ваш IP адрес>')  # Хранилище QUIK (К QUIK на удаленном компьютере обращаемся по IP или названию)
-    broker = store.getbroker(use_positions=False)  # Брокер со счетом по умолчанию (срочный рынок РФ)
+    store = QKStore()  # Хранилище QUIK
     # broker = store.getbroker(use_positions=False, ClientCode=clientCode, FirmId=firmId, TradeAccountId='L01-00000F00', LimitKind=2, CurrencyCode='SUR', IsFutures=False)  # Брокер со счетом фондового рынка РФ
+    broker = store.getbroker(use_positions=False)  # Брокер со счетом по умолчанию (срочный рынок РФ)
     cerebro.setbroker(broker)  # Устанавливаем брокера
     data = store.getdata(dataname=symbol, timeframe=bt.TimeFrame.Minutes, compression=1,
-                         fromdate=datetime(2022, 2, 16), sessionstart=time(7, 0), LiveBars=True)  # Исторические и новые минутные бары за все время
+                         fromdate=datetime(2023, 2, 5), sessionstart=time(7, 0), LiveBars=True)  # Исторические и новые минутные бары за все время
     cerebro.adddata(data)  # Добавляем данные
     cerebro.addsizer(bt.sizers.FixedSize, stake=1000)  # Кол-во акций для покупки/продажи
     cerebro.run()  # Запуск торговой системы
