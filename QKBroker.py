@@ -281,7 +281,7 @@ class QKBroker(with_metaclass(MetaQKBroker, BrokerBase)):
                 order.status = Order.Margin  # все равно ставим статус заявки Order.Margin
         self.notifs.append(order.clone())  # Уведомляем брокера о заявке
         if order.status != Order.Accepted:  # Если новая заявка не зарегистрирована
-            self.store.oco_pc_check(order)  # то проверяем связанные и родительскую/дочерние заявки
+            self.store.oco_pc_check(order)  # то проверяем связанные и родительскую/дочерние заявки (Canceled, Rejected, Margin)
 
     def on_trade(self, data):
         """Обработчик события получения новой / изменения существующей сделки.
