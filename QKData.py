@@ -38,7 +38,7 @@ class QKData(with_metaclass(MetaQKData, AbstractDataBase)):
 
         self.jsonBars = []  # Исторические бары после применения фильтров
         self.newCandleSubscribed = False  # Наличие подписки на получение новых баров
-        self.liveMode = False  # Режим. False = Получение истории, True = Получение новых баров
+        self.liveMode = False  # Режим получения баров. False = История, True = Новые бары
 
     def setenvironment(self, env):
         """Добавление хранилища QUIK в cerebro"""
@@ -48,7 +48,7 @@ class QKData(with_metaclass(MetaQKData, AbstractDataBase)):
     def start(self):
         super(QKData, self).start()
         self.put_notification(self.DELAYED)  # Отправляем уведомление об отправке исторических (не новых) баров
-        json_bars = self.store.qpProvider.GetCandlesFromDataSource(self.classCode, self.secCode, self.interval, 0)['data']  # Получаем все бары из QUIK
+        json_bars = self.store.provider.GetCandlesFromDataSource(self.classCode, self.secCode, self.interval, 0)['data']  # Получаем все бары из QUIK
         for bar in json_bars:  # Пробегаемся по всем полученным барам из QUIK
             if self.is_bar_valid(bar, False):  # Если исторический бар соответствует всем условиям выборки
                 self.jsonBars.append(bar)  # то добавляем бар
@@ -65,22 +65,22 @@ class QKData(with_metaclass(MetaQKData, AbstractDataBase)):
                 self.put_notification(self.DISCONNECTED)  # Отправляем уведомление об окончании получения исторических баров
                 if not self.p.LiveBars:  # Если новые бары не принимаем
                     return False  # Больше сюда заходить не будем
-                if not self.store.qpProvider.IsSubscribed(self.classCode, self.secCode, self.interval)['data']:  # Если не было подписки на тикер/интервал
-                    self.store.qpProvider.SubscribeToCandles(self.classCode, self.secCode, self.interval)  # Подписываемся на новые бары
-                    self.store.subscribedSymbols.append({'class': self.classCode, 'sec': self.secCode, 'interval': self.interval})  # Добавляем в список подписанных тикеров/интервалов
+                if not self.store.provider.IsSubscribed(self.classCode, self.secCode, self.interval)['data']:  # Если не было подписки на тикер/интервал
+                    self.store.provider.SubscribeToCandles(self.classCode, self.secCode, self.interval)  # Подписываемся на новые бары
+                    self.store.subscribed_symbols.append({'class': self.classCode, 'sec': self.secCode, 'interval': self.interval})  # Добавляем в список подписанных тикеров/интервалов
                 self.newCandleSubscribed = True  # Дальше будем получать новые бары по подписке
                 return None  # Будем заходить еще
         else:  # Если получаем новые бары по подписке
-            if len(self.store.newBars) == 0:  # Если в хранилище никаких новых баров нет
+            if len(self.store.new_bars) == 0:  # Если в хранилище никаких новых баров нет
                 return None  # то нового бара нет, будем заходить еще
-            new_bars = [newBar for newBar in self.store.newBars  # Смотрим в хранилище новых баров
+            new_bars = [newBar for newBar in self.store.new_bars  # Смотрим в хранилище новых баров
                         if newBar['class'] == self.classCode and  # бары с нужным кодом площадки,
                         newBar['sec'] == self.secCode and  # тикером,
                         int(newBar['interval']) == self.interval]  # и интервалом
             if len(new_bars) == 0:  # Если новый бар еще не появился
                 return None  # то нового бара нет, будем заходить еще
             bar = new_bars[0]  # Получаем текущий (первый) бар из выборки, с ним будем работать
-            self.store.newBars.remove(bar)  # Убираем его из хранилища новых баров
+            self.store.new_bars.remove(bar)  # Убираем его из хранилища новых баров
             if not self.is_bar_valid(bar, True):  # Если бар по подписке не соответствует всем условиям выборки
                 return None  # то нового бара нет, будем заходить еще
             dt_open = self.get_bar_open_date_time(bar)  # Дата/время открытия бара
@@ -109,7 +109,7 @@ class QKData(with_metaclass(MetaQKData, AbstractDataBase)):
     def stop(self):
         super(QKData, self).stop()
         if self.newCandleSubscribed:  # Если принимали новые бары и подписались на них
-            self.store.qpProvider.UnsubscribeFromCandles(self.classCode, self.secCode, self.interval)  # Отменяем подписку на новые бары
+            self.store.provider.UnsubscribeFromCandles(self.classCode, self.secCode, self.interval)  # Отменяем подписку на новые бары
             self.put_notification(self.DISCONNECTED)  # Отправляем уведомление об окончании получения новых баров
         self.store.DataCls = None  # Удаляем класс данных в хранилище
 
@@ -150,9 +150,12 @@ class QKData(with_metaclass(MetaQKData, AbstractDataBase)):
         return dt_open + timedelta(minutes=self.interval * period)  # Время закрытия бара
 
     def get_quik_date_time_now(self):
-        """Текущая дата и время из QUIK (МСК)"""
+        """Текущая дата и время
+        - Если получили последний бар истории, то запрашием текущие дату и время из QUIK
+        - Если находимся в режиме получения истории, то переводим текущие дату и время с компьютера в МСК
+        """
         if not self.liveMode:  # Если не находимся в режиме получения новых баров
             return datetime.now(self.store.MarketTimeZone).replace(tzinfo=None)  # То время МСК получаем из локального времени
-        d = self.store.qpProvider.GetInfoParam('TRADEDATE')['data']  # Дата на сервере в виде строки dd.mm.yyyy
-        t = self.store.qpProvider.GetInfoParam('SERVERTIME')['data']  # Время на сервере в виде строки hh:mi:ss
+        d = self.store.provider.GetInfoParam('TRADEDATE')['data']  # Дата на сервере в виде строки dd.mm.yyyy
+        t = self.store.provider.GetInfoParam('SERVERTIME')['data']  # Время на сервере в виде строки hh:mi:ss
         return datetime.strptime(f'{d} {t}', '%d.%m.%Y %H:%M:%S')  # Переводим строки в дату и время и возвращаем их
