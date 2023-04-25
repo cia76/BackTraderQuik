@@ -156,6 +156,9 @@ class QKData(with_metaclass(MetaQKData, AbstractDataBase)):
         """
         if not self.liveMode:  # Если не находимся в режиме получения новых баров
             return datetime.now(self.store.MarketTimeZone).replace(tzinfo=None)  # То время МСК получаем из локального времени
-        d = self.store.provider.GetInfoParam('TRADEDATE')['data']  # Дата на сервере в виде строки dd.mm.yyyy
+        d = self.store.provider.GetInfoParam('TRADEDATE')['data']  # Дата на сервере в виде строки dd.mm.yyyy. Может прийти неверная дата
         t = self.store.provider.GetInfoParam('SERVERTIME')['data']  # Время на сервере в виде строки hh:mi:ss
-        return datetime.strptime(f'{d} {t}', '%d.%m.%Y %H:%M:%S')  # Переводим строки в дату и время и возвращаем их
+        try:  # Проверяем, можно ли привести полученные строки в дату и время
+            return datetime.strptime(f'{d} {t}', '%d.%m.%Y %H:%M:%S')  # Переводим строки в дату и время и возвращаем ее
+        except ValueError:  # Если нельзя привести полученные строки в дату и время
+            return datetime.now(self.store.MarketTimeZone).replace(tzinfo=None)  # То время МСК получаем из локального времени
