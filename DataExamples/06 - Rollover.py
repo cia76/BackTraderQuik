@@ -7,7 +7,7 @@ import Strategy as ts  # Торговые системы
 if __name__ == '__main__':  # Точка входа при запуске этого скрипта
     symbol = 'TQBR.SBER'  # Тикер истории QUIK
     d1 = feeds.GenericCSVData(  # Получаем историю из файла
-        dataname=f'..\\..\\Data\\{symbol}_D1.txt',  # Файл для импорта из QUIK. Создается из примера QuikPy 04 - Bars.py
+        dataname=f'..\\..\\Data\\{symbol}_D1.txt',  # Файл для импорта из QUIK. Создается из примера QuikPy Bars.py
         separator='\t',  # Колонки разделены табуляцией
         dtformat='%d.%m.%Y %H:%M',  # Формат даты/времени DD.MM.YYYY HH:MI
         openinterest=-1,  # Открытого интереса в файле нет

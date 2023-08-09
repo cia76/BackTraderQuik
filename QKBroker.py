@@ -51,8 +51,8 @@ class QKBroker(with_metaclass(MetaQKBroker, BrokerBase)):
 
     def start(self):
         super(QKBroker, self).start()
-        self.store.provider.OnTransReply = self.on_trans_reply  # Ответ на транзакцию пользователя
-        self.store.provider.OnTrade = self.on_trade  # Получение новой / изменение существующей сделки
+        self.store.provider.on_trans_reply = self.on_trans_reply  # Ответ на транзакцию пользователя
+        self.store.provider.on_trade = self.on_trade  # Получение новой / изменение существующей сделки
         if self.p.use_positions:  # Если нужно при запуске брокера получить текущие позиции на бирже
             self.get_all_active_positions(self.p.ClientCode, self.p.FirmId, self.p.LimitKind, self.p.Lots, self.p.IsFutures)  # То получаем их
         self.startingcash = self.cash = self.getcash()  # Стартовые и текущие свободные средства по счету
@@ -115,8 +115,8 @@ class QKBroker(with_metaclass(MetaQKBroker, BrokerBase)):
         super(QKBroker, self).stop()
         self.store.provider.OnConnected = self.store.provider.DefaultHandler  # Соединение терминала с сервером QUIK
         self.store.provider.OnDisconnected = self.store.provider.DefaultHandler  # Отключение терминала от сервера QUIK
-        self.store.provider.OnTransReply = self.store.provider.DefaultHandler  # Ответ на транзакцию пользователя
-        self.store.provider.OnTrade = self.store.provider.DefaultHandler  # Получение новой / изменение существующей сделки
+        self.store.provider.on_trans_reply = self.store.provider.DefaultHandler  # Ответ на транзакцию пользователя
+        self.store.provider.on_trade = self.store.provider.DefaultHandler  # Получение новой / изменение существующей сделки
         self.store.BrokerCls = None  # Удаляем класс брокера из хранилища
 
     # Функции

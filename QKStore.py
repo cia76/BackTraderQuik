@@ -51,7 +51,7 @@ class QKStore(with_metaclass(MetaSingleton, object)):
     def __init__(self):
         super(QKStore, self).__init__()
         self.notifs = collections.deque()  # Уведомления хранилища
-        self.provider = QuikPy(Host=self.p.Host, RequestsPort=self.p.RequestsPort, CallbacksPort=self.p.CallbacksPort)  # Вызываем конструктор QuikPy с адресом хоста и портами
+        self.provider = QuikPy(host=self.p.Host, requests_port=self.p.RequestsPort, callbacks_port=self.p.CallbacksPort)  # Вызываем конструктор QuikPy с адресом хоста и портами
         self.symbols = {}  # Информация о тикерах
         self.new_bars = []  # Новые бары по всем подпискам на тикеры из QUIK
         self.connected = True  # Считаем, что изначально QUIK подключен к серверу брокера
