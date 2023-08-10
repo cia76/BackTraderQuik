@@ -387,11 +387,11 @@ class QKBroker(with_metaclass(MetaQKBroker, BrokerBase)):
         order: Order = self.orders[trans_id]  # Ищем заявку по номеру транзакции
         order.addinfo(order_num=order_num)  # Сохраняем номер заявки на бирже
         # TODO Есть поле flags, но оно не документировано. Лучше вместо текстового результата транзакции разбирать по нему
-        result_msg = qk_trans_reply['result_msg']  # По результату исполнения транзакции (очень плохое решение)
+        result_msg = str(qk_trans_reply['result_msg']).lower()  # По результату исполнения транзакции (очень плохое решение)
         status = int(qk_trans_reply['status'])  # Статус транзакции
-        if status == 15 or 'зарегистрирована' in result_msg:  # Если пришел ответ по новой заявке
+        if status == 15 or 'зарегистрирован' in result_msg:  # Если пришел ответ по новой заявке
             order.accept(self)  # Заявка принята на бирже (Order.Accepted)
-        elif 'снята' in result_msg:  # Если пришел ответ по отмене существующей заявки
+        elif 'снят' in result_msg:  # Если пришел ответ по отмене существующей заявки
             try:  # TODO В BT очень редко при order.cancel() возникает ошибка:
                 #    order.py, line 487, in cancel
                 #    self.executed.dt = self.data.datetime[0]
@@ -405,8 +405,8 @@ class QKBroker(with_metaclass(MetaQKBroker, BrokerBase)):
             # - Не найдена заявка для удаления
             # - Вы не можете снять данную заявку
             # - Превышен лимит отправки транзакций для данного логина
-            if status == 4 and 'Не найдена заявка' in result_msg or \
-               status == 5 and 'не можете снять' in result_msg or 'Превышен лимит' in result_msg:
+            if status == 4 and 'не найдена заявка' in result_msg or \
+               status == 5 and 'не можете снять' in result_msg or 'превышен лимит' in result_msg:
                 return  # то заявку не отменяем, выходим, дальше не продолжаем
             try:  # TODO В BT очень редко при order.reject() возникает ошибка:
                 #    order.py, line 480, in reject
