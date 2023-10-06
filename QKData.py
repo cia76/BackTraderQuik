@@ -83,7 +83,7 @@ class QKData(with_metaclass(MetaQKData, AbstractDataBase)):
             self.store.new_bars.remove(bar)  # Убираем его из хранилища новых баров
             if not self.is_bar_valid(bar, True):  # Если бар по подписке не соответствует всем условиям выборки
                 return None  # то нового бара нет, будем заходить еще
-            dt_open = self.get_bar_open_date_time(bar)  # Дата/время открытия бара
+            dt_open = self.get_bar_open_date_time(bar)  # Дата и время открытия бара
             dt_next_bar_close = self.get_bar_close_date_time(dt_open, 2)  # Биржевое время закрытия следующего бара
             time_market_now = self.get_quik_date_time_now()  # Текущее биржевое время из QUIK
             # Переходим в режим получения новых баров (LIVE), если не находимся в этом режиме и
@@ -117,10 +117,10 @@ class QKData(with_metaclass(MetaQKData, AbstractDataBase)):
 
     def is_bar_valid(self, bar, live):
         """Проверка бара на соответствие условиям выборки"""
-        dt_open = self.get_bar_open_date_time(bar)  # Дата/время открытия бара
+        dt_open = self.get_bar_open_date_time(bar)  # Дата и время открытия бара
         if self.p.sessionstart != time.min and dt_open.time() < self.p.sessionstart:  # Если задано время начала сессии и открытие бара до этого времени
             return False  # то бар не соответствует условиям выборки
-        dt_close = self.get_bar_close_date_time(dt_open)  # Дата/время закрытия бара
+        dt_close = self.get_bar_close_date_time(dt_open)  # Дата и время закрытия бара
         if self.p.sessionend != time(23, 59, 59, 999990) and dt_close.time() > self.p.sessionend:  # Если задано время окончания сессии и закрытие бара после этого времени
             return False  # то бар не соответствует условиям выборки
         high = self.store.quik_to_bt_price(self.classCode, self.secCode, bar['high'])  # High
@@ -141,12 +141,12 @@ class QKData(with_metaclass(MetaQKData, AbstractDataBase)):
 
     @staticmethod
     def get_bar_open_date_time(bar):
-        """Дата/время открытия бара"""
+        """Дата и время открытия бара"""
         dt_json = bar['datetime']  # Получаем составное значение даты и времени открытия бара
         return datetime(dt_json['year'], dt_json['month'], dt_json['day'], dt_json['hour'], dt_json['min'])  # Время открытия бара
 
     def get_bar_close_date_time(self, dt_open, period=1):
-        """Дата/время закрытия бара"""
+        """Дата и время закрытия бара"""
         return dt_open + timedelta(minutes=self.interval * period)  # Время закрытия бара
 
     def get_quik_date_time_now(self):
