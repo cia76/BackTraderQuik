@@ -325,7 +325,7 @@ class QKBroker(with_metaclass(MetaQKBroker, BrokerBase)):
         if response['cmd'] == 'lua_transaction_error':  # Если возникла ошибка при постановке заявки на уровне QUIK
             print(f'Ошибка отправки заявки в QUIK {response["data"]["CLASSCODE"]}.{response["data"]["SECCODE"]} {response["lua_error"]}')  # то заявка не отправляется на биржу, выводим сообщение об ошибке
             order.reject(self)  # Отклоняем заявку (Order.Rejected)
-        self.orders[order.ref] = order  # Сохраняем в списке заявок, отправленных на биржу
+        self.orders[order.ref] = order  # Сохраняем заявку в списке заявок, отправленных на биржу
         return order  # Возвращаем заявку
 
     def cancel_order(self, order):
