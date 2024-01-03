@@ -299,9 +299,9 @@ class QKBroker(with_metaclass(MetaQKBroker, BrokerBase)):
                 plimit = self.store.bt_to_quik_price(class_code, sec_code, plimit)  # Переводим цену из BackTrader в QUIK
                 limit_price = round(plimit, scale)  # то ее и берем, округлив цену до кол-ва значащих цифр
             elif order.isbuy():  # Если цена не задана, и покупаем
-                limit_price = price + slippage  # то будем покупать по большей цене в размер проскальзывания
+                limit_price = round(price + slippage, scale)  # то будем покупать по большей цене в размер проскальзывания
             else:  # Если цена не задана, и продаем
-                limit_price = price - slippage  # то будем продавать по меньшей цене в размер проскальзывания
+                limit_price = round(price - slippage, scale)  # то будем продавать по меньшей цене в размер проскальзывания
             expiry_date = 'GTC'  # По умолчанию будем держать заявку до отмены GTC = Good Till Cancelled
             if order.valid in [Order.DAY, 0]:  # Если заявка поставлена на день
                 expiry_date = 'TODAY'  # то будем держать ее до окончания текущей торговой сессии
