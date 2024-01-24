@@ -445,9 +445,13 @@ class QKBroker(with_metaclass(MetaQKBroker, BrokerBase)):
             if isinstance(json_order, int):  # Если заявка так и не была найдена
                 print(f'Заявка с номером {order_num} не найдена на бирже со 2-ой попытки')
                 return  # то выходим, дальше не продолжаем
-        trans_id = int(json_order['trans_id'])  # Получаем номер транзакции из заявки с биржи
+        try:
+            trans_id = int(json_order['trans_id'])  # Получаем номер транзакции из заявки с биржи
+        except ValueError:
+            print(f'Номер транзакции {json_order["trans_id"]} заявки с номером {order_num} не является целым числом')
+            return  # выходим, дальше не продолжаем
         if trans_id == 0:  # Заявки, выставленные не из автоторговли / только что (с нулевыми номерами транзакции)
-            return  # не обрабатываем, пропускаем
+            return  # выходим, дальше не продолжаем
         if trans_id not in self.orders:  # Пришла заявка не из автоторговли
             print(f'Заявка с номером {order_num} и номером транзакции {trans_id} была выставлена не из торговой системы')
             return  # выходим, дальше не продолжаем
