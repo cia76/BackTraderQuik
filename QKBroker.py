@@ -1,6 +1,7 @@
 import collections
 from datetime import datetime, date
 import time
+import logging
 
 from backtrader import BrokerBase, Order, BuyOrder, SellOrder
 from backtrader.position import Position
@@ -21,6 +22,7 @@ class QKBroker(with_metaclass(MetaQKBroker, BrokerBase)):
     # TODO Сделать пример постановки заявок по разным портфелям
     # Обсуждение решения: https://community.backtrader.com/topic/1165/does-backtrader-support-multiple-brokers
     # Пример решения: https://github.com/JacobHanouna/backtrader/blob/ccxt_multi_broker/backtrader/brokers/ccxtmultibroker.py
+    logger = logging.getLogger('QKBroker')
 
     params = (
         ('use_positions', True),  # При запуске брокера подтягиваются текущие позиции с биржи
@@ -376,20 +378,24 @@ class QKBroker(with_metaclass(MetaQKBroker, BrokerBase)):
 
     def on_trans_reply(self, data):
         """Обработчик события ответа на транзакцию пользователя"""
+        self.logger.debug(f'on_trans_reply: data={data}')
         qk_trans_reply = data['data']  # Ответ на транзакцию
+        order_num = int(qk_trans_reply['order_num'])  # Номер заявки на бирже
         trans_id = int(qk_trans_reply['trans_id'])  # Номер транзакции заявки
         if trans_id == 0:  # Заявки, выставленные не из автоторговли / только что (с нулевыми номерами транзакции)
+            self.logger.debug(f'on_trans_reply: Заявка с номером {order_num}. Номер транзакции 0. Выход')
             return  # не обрабатываем, пропускаем
-        order_num = int(qk_trans_reply['order_num'])  # Номер заявки на бирже
         if trans_id not in self.orders:  # Пришла заявка не из автоторговли
-            print(f'Заявка {order_num} на бирже с номером транзакции {trans_id} не найдена')
+            self.logger.debug(f'on_trans_reply: Заявка с номером {order_num}. Номер транзакции {trans_id} был выставлен не из торговой системы. Выход')
             return  # не обрабатываем, пропускаем
         order: Order = self.orders[trans_id]  # Ищем заявку по номеру транзакции
         order.addinfo(order_num=order_num)  # Сохраняем номер заявки на бирже
+        self.logger.debug(f'on_trans_reply: Заявка с номером {order_num}. order={order}')
         # TODO Есть поле flags, но оно не документировано. Лучше вместо текстового результата транзакции разбирать по нему
         result_msg = str(qk_trans_reply['result_msg']).lower()  # По результату исполнения транзакции (очень плохое решение)
         status = int(qk_trans_reply['status'])  # Статус транзакции
         if status == 15 or 'зарегистрирован' in result_msg:  # Если пришел ответ по новой заявке
+            self.logger.debug(f'on_trans_reply: Перевод заявки с номером {order_num} в статус принята на бирже (Order.Accepted)')
             order.accept(self)  # Заявка принята на бирже (Order.Accepted)
         elif 'снят' in result_msg:  # Если пришел ответ по отмене существующей заявки
             try:  # TODO В BT очень редко при order.cancel() возникает ошибка:
@@ -398,6 +404,7 @@ class QKBroker(with_metaclass(MetaQKBroker, BrokerBase)):
                 #    linebuffer.py, line 163, in __getitem__
                 #    return self.array[self.idx + ago]
                 #    IndexError: array index out of range
+                self.logger.debug(f'on_trans_reply: Перевод заявки с номером {order_num} в статус отменена (Order.Canceled)')
                 order.cancel()  # Отменяем существующую заявку (Order.Canceled)
             except (KeyError, IndexError):  # При ошибке
                 order.status = Order.Canceled  # все равно ставим статус заявки Order.Canceled
@@ -407,6 +414,7 @@ class QKBroker(with_metaclass(MetaQKBroker, BrokerBase)):
             # - Превышен лимит отправки транзакций для данного логина
             if status == 4 and 'не найдена заявка' in result_msg or \
                status == 5 and 'не можете снять' in result_msg or 'превышен лимит' in result_msg:
+                self.logger.debug(f'on_trans_reply: Ошибка заявки с номером {order_num}. Выход')
                 return  # то заявку не отменяем, выходим, дальше не продолжаем
             try:  # TODO В BT очень редко при order.reject() возникает ошибка:
                 #    order.py, line 480, in reject
@@ -414,6 +422,7 @@ class QKBroker(with_metaclass(MetaQKBroker, BrokerBase)):
                 #    linebuffer.py, line 163, in __getitem__
                 #    return self.array[self.idx + ago]
                 #    IndexError: array index out of range
+                self.logger.debug(f'on_trans_reply: Перевод заявки с номером {order_num} в статус отклонена (Order.Rejected)')
                 order.reject(self)  # Отклоняем заявку (Order.Rejected)
             except (KeyError, IndexError):  # При ошибке
                 order.status = Order.Rejected  # все равно ставим статус заявки Order.Rejected
@@ -424,46 +433,55 @@ class QKBroker(with_metaclass(MetaQKBroker, BrokerBase)):
                 #    linebuffer.py, line 163, in __getitem__
                 #    return self.array[self.idx + ago]
                 #    IndexError: array index out of range
+                self.logger.debug(f'on_trans_reply: Перевод заявки с номером {order_num} в статус не прошла проверку лимитов (Order.Margin)')
                 order.margin()  # Для заявки не хватает средств (Order.Margin)
             except (KeyError, IndexError):  # При ошибке
                 order.status = Order.Margin  # все равно ставим статус заявки Order.Margin
         self.notifs.append(order.clone())  # Уведомляем брокера о заявке
         if order.status != Order.Accepted:  # Если новая заявка не зарегистрирована
+            self.logger.debug(f'on_trans_reply: Заявка с номером {order_num}. Проверка связанных и родительских/дочерних заявок')
             self.oco_pc_check(order)  # то проверяем связанные и родительскую/дочерние заявки (Canceled, Rejected, Margin)
+        self.logger.debug(f'on_trans_reply: Заявка с номером {order_num}. Выход')
 
     def on_trade(self, data):
         """Обработчик события получения новой / изменения существующей сделки.
         Выполняется до события изменения существующей заявки. Нужен для определения цены исполнения заявок.
         """
+        self.logger.debug(f'on_trade: data={data}')
         qk_trade = data['data']  # Сделка в QUIK
         order_num = int(qk_trade['order_num'])  # Номер заявки на бирже
-        json_order = self.store.provider.GetOrderByNumber(order_num)['data']  # По номеру заявки в сделке пробуем получить заявку с биржи
-        if isinstance(json_order, int):  # Если заявка не найдена, то в ответ получаем целое число номера заявки. Возможно заявка есть, но она не успела прийти к брокеру
-            print(f'Заявка с номером {order_num} не найдена на бирже с 1-ой попытки. Через 3 с будет 2-ая попытка')
+        qk_order = self.store.provider.GetOrderByNumber(order_num)['data']  # По номеру заявки в сделке пробуем получить заявку с биржи
+        if isinstance(qk_order, int):  # Если заявка не найдена, то в ответ получаем целое число номера заявки. Возможно заявка есть, но она не успела прийти к брокеру
+            self.logger.debug(f'on_trade: Заявка с номером {order_num} не найдена на бирже с 1-ой попытки. Через 3 с будет 2-ая попытка')
             time.sleep(3)  # Ждем 3 секунды, пока заявка не придет к брокеру
-            json_order = self.store.provider.GetOrderByNumber(order_num)['data']  # Снова пробуем получить заявку с биржи по ее номеру
-            if isinstance(json_order, int):  # Если заявка так и не была найдена
-                print(f'Заявка с номером {order_num} не найдена на бирже со 2-ой попытки')
+            qk_order = self.store.provider.GetOrderByNumber(order_num)['data']  # Снова пробуем получить заявку с биржи по ее номеру
+            if isinstance(qk_order, int):  # Если заявка так и не была найдена
+                self.logger.debug(f'on_trade: Заявка с номером {order_num} не найдена на бирже со 2-ой попытки. Выход')
                 return  # то выходим, дальше не продолжаем
-        try:
-            trans_id = int(json_order['trans_id'])  # Получаем номер транзакции из заявки с биржи
+        self.logger.debug(f'on_trade: Заявка с номером {order_num} qk_order={qk_order}')
+        try:  # Бывает, что номер транзакции не число. Проверяем
+            trans_id = int(qk_order['trans_id'])  # Получаем номер транзакции из заявки с биржи
         except ValueError:
-            print(f'Номер транзакции {json_order["trans_id"]} заявки с номером {order_num} не является целым числом')
+            self.logger.debug(f'on_trade: Заявка с номером {order_num}. Номер транзакции {qk_order["trans_id"]} не является целым числом. Выход')
             return  # выходим, дальше не продолжаем
         if trans_id == 0:  # Заявки, выставленные не из автоторговли / только что (с нулевыми номерами транзакции)
+            self.logger.debug(f'on_trade: Заявка с номером {order_num}. Номер транзакции 0. Выход')
             return  # выходим, дальше не продолжаем
         if trans_id not in self.orders:  # Пришла заявка не из автоторговли
-            print(f'Заявка с номером {order_num} и номером транзакции {trans_id} была выставлена не из торговой системы')
+            self.logger.debug(f'on_trade: Заявка с номером {order_num}. Номер транзакции {trans_id} был выставлен не из торговой системы. Выход')
             return  # выходим, дальше не продолжаем
         order: Order = self.orders[trans_id]  # Ищем заявку по номеру транзакции
         order.addinfo(order_num=order_num)  # Сохраняем номер заявки на бирже (может быть переход от стоп заявки к лимитной с изменением номера на бирже)
+        self.logger.debug(f'on_trade: Заявка с номером {order_num}. order={order}')
         class_code = qk_trade['class_code']  # Код площадки
         sec_code = qk_trade['sec_code']  # Код тикера
         dataname = self.store.class_sec_code_to_data_name(class_code, sec_code)  # Получаем название тикера по коду площадки и коду тикера
+        self.logger.debug(f'on_trade: Заявка с номером {order_num}. dataname={dataname}')
         trade_num = int(qk_trade['trade_num'])  # Номер сделки (дублируется 3 раза)
         if dataname not in self.trade_nums.keys():  # Если это первая сделка по тикеру
             self.trade_nums[dataname] = []  # то ставим пустой список сделок
         elif trade_num in self.trade_nums[dataname]:  # Если номер сделки есть в списке (фильтр для дублей)
+            self.logger.debug(f'on_trade: Заявка с номером {order_num}. Номер сделки {trade_num} есть в списке сделок (дубль). Выход')
             return  # то выходим, дальше не продолжаем
         self.trade_nums[dataname].append(trade_num)  # Запоминаем номер сделки по тикеру, чтобы в будущем ее не обрабатывать (фильтр для дублей)
         size = int(qk_trade['qty'])  # Абсолютное кол-во
@@ -472,23 +490,31 @@ class QKBroker(with_metaclass(MetaQKBroker, BrokerBase)):
         if qk_trade['flags'] & 0b100 == 0b100:  # Если сделка на продажу (бит 2)
             size *= -1  # то кол-во ставим отрицательным
         price = self.store.quik_to_bt_price(class_code, sec_code, float(qk_trade['price']))  # Переводим цену исполнения за лот в цену исполнения за штуку
+        self.logger.debug(f'on_trade: Заявка с номером {order_num}. size={size}, price={price}')
         try:  # TODO Очень редко возникает ошибка:
             #    linebuffer.py, line 163, in __getitem__
             #    return self.array[self.idx + ago]
             #    IndexError: array index out of range
             dt = order.data.datetime[0]  # Дата и время исполнения заявки. Последняя известная
+            self.logger.debug(f'on_trade: Заявка с номером {order_num}. Дата/время исполнения заявки по бару {dt}')
         except (KeyError, IndexError):  # При ошибке
             dt = datetime.now(QKStore.MarketTimeZone)  # Берем текущее время на бирже из локального
+            self.logger.debug(f'on_trade: Заявка с номером {order_num}. Дата/время исполнения заявки по текущему {dt}')
         pos = self.getposition(order.data)  # Получаем позицию по тикеру или нулевую позицию если тикера в списке позиций нет
         psize, pprice, opened, closed = pos.update(size, price)  # Обновляем размер/цену позиции на размер/цену сделки
         order.execute(dt, size, price, closed, 0, 0, opened, 0, 0, 0, 0, psize, pprice)  # Исполняем заявку в BackTrader
         if order.executed.remsize:  # Если заявка исполнена частично (осталось что-то к исполнению)
+            self.logger.debug(f'on_trade: Заявка с номером {order_num} исполнилась частично. Остаток к исполнения {order.executed.remsize}')
             if order.status != order.Partial:  # Если заявка переходит в статус частичного исполнения (может исполняться несколькими частями)
+                self.logger.debug(f'on_trade: Перевод заявки с номером {order_num} в статус частично исполнена (Order.Partial)')
                 order.partial()  # Переводим заявку в статус Order.Partial
                 self.notifs.append(order.clone())  # Уведомляем брокера о частичном исполнении заявки
         else:  # Если заявка исполнена полностью (ничего нет к исполнению)
+            self.logger.debug(f'on_trade: Перевод заявки с номером {order_num} в статус полностью исполнена (Order.Completed)')
             order.completed()  # Переводим заявку в статус Order.Completed
             self.notifs.append(order.clone())  # Уведомляем брокера о полном исполнении заявки
             # Снимаем oco-заявку только после полного исполнения заявки
             # Если нужно снять oco-заявку на частичном исполнении, то прописываем это правило в ТС
+            self.logger.debug(f'on_trade: Заявка с номером {order_num}. Проверка связанных и родительских/дочерних заявок')
             self.oco_pc_check(order)  # Проверяем связанные и родительскую/дочерние заявки (Completed)
+        self.logger.debug(f'on_trade: Заявка с номером {order_num}. Выход')
