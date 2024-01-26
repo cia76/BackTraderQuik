@@ -1,7 +1,7 @@
 import collections
 from datetime import datetime, date
 import time
-import logging
+import logging  # Будем вести лог
 
 from backtrader import BrokerBase, Order, BuyOrder, SellOrder
 from backtrader.position import Position
@@ -22,7 +22,7 @@ class QKBroker(with_metaclass(MetaQKBroker, BrokerBase)):
     # TODO Сделать пример постановки заявок по разным портфелям
     # Обсуждение решения: https://community.backtrader.com/topic/1165/does-backtrader-support-multiple-brokers
     # Пример решения: https://github.com/JacobHanouna/backtrader/blob/ccxt_multi_broker/backtrader/brokers/ccxtmultibroker.py
-    logger = logging.getLogger('QKBroker')
+    logger = logging.getLogger('QKBroker')  # Будем вести лог
 
     params = (
         ('use_positions', True),  # При запуске брокера подтягиваются текущие позиции с биржи
@@ -450,22 +450,10 @@ class QKBroker(with_metaclass(MetaQKBroker, BrokerBase)):
         self.logger.debug(f'on_trade: data={data}')
         qk_trade = data['data']  # Сделка в QUIK
         order_num = int(qk_trade['order_num'])  # Номер заявки на бирже
-        qk_order = self.store.provider.GetOrderByNumber(order_num)['data']  # По номеру заявки в сделке пробуем получить заявку с биржи
-        if isinstance(qk_order, int):  # Если заявка не найдена, то в ответ получаем целое число номера заявки. Возможно заявка есть, но она не успела прийти к брокеру
-            self.logger.debug(f'on_trade: Заявка с номером {order_num} не найдена на бирже с 1-ой попытки. Через 3 с будет 2-ая попытка')
-            time.sleep(3)  # Ждем 3 секунды, пока заявка не придет к брокеру
-            qk_order = self.store.provider.GetOrderByNumber(order_num)['data']  # Снова пробуем получить заявку с биржи по ее номеру
-            if isinstance(qk_order, int):  # Если заявка так и не была найдена
-                self.logger.debug(f'on_trade: Заявка с номером {order_num} не найдена на бирже со 2-ой попытки. Выход')
-                return  # то выходим, дальше не продолжаем
-        self.logger.debug(f'on_trade: Заявка с номером {order_num} qk_order={qk_order}')
-        try:  # Бывает, что номер транзакции не число. Проверяем
-            trans_id = int(qk_order['trans_id'])  # Получаем номер транзакции из заявки с биржи
-        except ValueError:
-            self.logger.debug(f'on_trade: Заявка с номером {order_num}. Номер транзакции {qk_order["trans_id"]} не является целым числом. Выход')
-            return  # выходим, дальше не продолжаем
+        trans_id = int(qk_trade['trans_id'])  # Номер транзакции из заявки на бирже. Не используем GetOrderByNumber, т.к. он может вернуть 0
+        self.logger.debug(f'on_trade: Заявка с номером {order_num}. Номер транзакции {trans_id}')
         if trans_id == 0:  # Заявки, выставленные не из автоторговли / только что (с нулевыми номерами транзакции)
-            self.logger.debug(f'on_trade: Заявка с номером {order_num}. Номер транзакции 0. Выход')
+            self.logger.debug(f'on_trade: Заявка с номером {order_num} выставлена не из автоторговли / только что. Выход')
             return  # выходим, дальше не продолжаем
         if trans_id not in self.orders:  # Пришла заявка не из автоторговли
             self.logger.debug(f'on_trade: Заявка с номером {order_num}. Номер транзакции {trans_id} был выставлен не из торговой системы. Выход')
