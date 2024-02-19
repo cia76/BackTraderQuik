@@ -1,7 +1,6 @@
 import collections
 from datetime import datetime, date
-import time
-import logging  # Будем вести лог
+import logging
 
 from backtrader import BrokerBase, Order, BuyOrder, SellOrder
 from backtrader.position import Position
@@ -10,12 +9,14 @@ from backtrader.utils.py3 import with_metaclass
 from BackTraderQuik import QKStore
 
 
+# noinspection PyArgumentList
 class MetaQKBroker(BrokerBase.__class__):
-    def __init__(cls, name, bases, dct):
-        super(MetaQKBroker, cls).__init__(name, bases, dct)  # Инициализируем класс брокера
-        QKStore.BrokerCls = cls  # Регистрируем класс брокера в хранилище QUIK
+    def __init__(self, name, bases, dct):
+        super(MetaQKBroker, self).__init__(name, bases, dct)  # Инициализируем класс брокера
+        QKStore.BrokerCls = self  # Регистрируем класс брокера в хранилище QUIK
 
 
+# noinspection PyProtectedMember,PyArgumentList
 class QKBroker(with_metaclass(MetaQKBroker, BrokerBase)):
     """Брокер QUIK"""
     # TODO Сделать обертку для поддержки множества брокеров
@@ -41,8 +42,8 @@ class QKBroker(with_metaclass(MetaQKBroker, BrokerBase)):
         super(QKBroker, self).__init__()
         self.store = QKStore(**kwargs)  # Хранилище QUIK
         self.notifs = collections.deque()  # Очередь уведомлений брокера о заявках
-        self.startingcash = self.cash = 0  # Стартовые и текущие свободные средства по счету
-        self.startingvalue = self.value = 0  # Стартовый и текущий баланс счета
+        self.startingcash = self.cash = self.getcash()  # Стартовые и текущие свободные средства по счету
+        self.startingvalue = self.value = self.getvalue()  # Стартовый и текущий баланс счета
         if not self.p.ClientCodeForOrders:  # Для брокера Финам нужно вместо кода клиента
             self.p.ClientCodeForOrders = self.p.ClientCode  # указать Номер торгового терминала
         self.trade_nums = dict()  # Список номеров сделок по тикеру для фильтрации дублей сделок
@@ -51,14 +52,13 @@ class QKBroker(with_metaclass(MetaQKBroker, BrokerBase)):
         self.ocos = {}  # Список связанных заявок (One Cancel Others)
         self.pcs = collections.defaultdict(collections.deque)  # Очередь всех родительских/дочерних заявок (Parent - Children)
 
-    def start(self):
-        super(QKBroker, self).start()
         self.store.provider.OnTransReply = self.on_trans_reply  # Ответ на транзакцию пользователя
         self.store.provider.OnTrade = self.on_trade  # Получение новой / изменение существующей сделки
+
+    def start(self):
+        super(QKBroker, self).start()
         if self.p.use_positions:  # Если нужно при запуске брокера получить текущие позиции на бирже
             self.get_all_active_positions(self.p.ClientCode, self.p.FirmId, self.p.LimitKind, self.p.Lots, self.p.IsFutures)  # То получаем их
-        self.startingcash = self.cash = self.getcash()  # Стартовые и текущие свободные средства по счету
-        self.startingvalue = self.value = self.getvalue()  # Стартовый и текущий баланс счета
 
     def getcash(self):
         """Свободные средства по счету"""
@@ -323,7 +323,7 @@ class QKBroker(with_metaclass(MetaQKBroker, BrokerBase)):
             transaction['ACTION'] = 'NEW_ORDER'  # Новая рыночная или лимитная заявка
             transaction['TYPE'] = 'L' if order.exectype == Order.Limit else 'M'  # L = лимитная заявка (по умолчанию), M = рыночная заявка
         response = self.store.provider.SendTransaction(transaction)  # Отправляем транзакцию на биржу
-        order.submit(self)  # Отправляем заявку на биржу (статус Order.Submitted)
+        order.submit(self)  # Отправляем заявку на биржу (Order.Submitted)
         if response['cmd'] == 'lua_transaction_error':  # Если возникла ошибка при постановке заявки на уровне QUIK
             print(f'Ошибка отправки заявки в QUIK {response["data"]["CLASSCODE"]}.{response["data"]["SECCODE"]} {response["lua_error"]}')  # то заявка не отправляется на биржу, выводим сообщение об ошибке
             order.reject(self)  # Отклоняем заявку (Order.Rejected)
