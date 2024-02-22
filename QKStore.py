@@ -78,7 +78,7 @@ class QKStore(with_metaclass(MetaSingleton, object)):
     # Функции
 
     def get_symbol_info(self, class_code, sec_code, reload=False):
-        """Получение информации тикера
+        """Спецификация тикера
 
         :param str class_code: Код площадки
         :param str sec_code: Код тикера
