@@ -48,7 +48,7 @@ class QKData(with_metaclass(MetaQKData, AbstractDataBase)):
     def start(self):
         super(QKData, self).start()
         self.put_notification(self.DELAYED)  # Отправляем уведомление об отправке исторических (не новых) баров
-        json_bars = self.store.provider.GetCandlesFromDataSource(self.classCode, self.secCode, self.interval, 0)['data']  # Получаем все бары из QUIK
+        json_bars = self.store.provider.get_candles_from_data_source(self.classCode, self.secCode, self.interval, 0)['data']  # Получаем все бары из QUIK
         for bar in json_bars:  # Пробегаемся по всем полученным барам из QUIK
             if self.is_bar_valid(bar, False):  # Если исторический бар соответствует всем условиям выборки
                 self.jsonBars.append(bar)  # то добавляем бар
@@ -65,8 +65,8 @@ class QKData(with_metaclass(MetaQKData, AbstractDataBase)):
                 self.put_notification(self.DISCONNECTED)  # Отправляем уведомление об окончании получения исторических баров
                 if not self.p.LiveBars:  # Если новые бары не принимаем
                     return False  # Больше сюда заходить не будем
-                if not self.store.provider.IsSubscribed(self.classCode, self.secCode, self.interval)['data']:  # Если не было подписки на тикер/интервал
-                    self.store.provider.SubscribeToCandles(self.classCode, self.secCode, self.interval)  # Подписываемся на новые бары
+                if not self.store.provider.is_subscribed(self.classCode, self.secCode, self.interval)['data']:  # Если не было подписки на тикер/интервал
+                    self.store.provider.subscribe_to_candles(self.classCode, self.secCode, self.interval)  # Подписываемся на новые бары
                     self.store.subscribed_symbols.append({'class': self.classCode, 'sec': self.secCode, 'interval': self.interval})  # Добавляем в список подписанных тикеров/интервалов
                 self.newCandleSubscribed = True  # Дальше будем получать новые бары по подписке
                 return None  # Будем заходить еще
@@ -109,7 +109,7 @@ class QKData(with_metaclass(MetaQKData, AbstractDataBase)):
     def stop(self):
         super(QKData, self).stop()
         if self.newCandleSubscribed:  # Если принимали новые бары и подписались на них
-            self.store.provider.UnsubscribeFromCandles(self.classCode, self.secCode, self.interval)  # Отменяем подписку на новые бары
+            self.store.provider.unsubscribe_from_candles(self.classCode, self.secCode, self.interval)  # Отменяем подписку на новые бары
             self.put_notification(self.DISCONNECTED)  # Отправляем уведомление об окончании получения новых баров
         self.store.DataCls = None  # Удаляем класс данных в хранилище
 
@@ -156,8 +156,8 @@ class QKData(with_metaclass(MetaQKData, AbstractDataBase)):
         """
         if not self.liveMode:  # Если не находимся в режиме получения новых баров
             return datetime.now(self.store.MarketTimeZone).replace(tzinfo=None)  # То время МСК получаем из локального времени
-        d = self.store.provider.GetInfoParam('TRADEDATE')['data']  # Дата на сервере в виде строки dd.mm.yyyy. Может прийти неверная дата
-        t = self.store.provider.GetInfoParam('SERVERTIME')['data']  # Время на сервере в виде строки hh:mi:ss
+        d = self.store.provider.get_info_param('TRADEDATE')['data']  # Дата на сервере в виде строки dd.mm.yyyy. Может прийти неверная дата
+        t = self.store.provider.get_info_param('SERVERTIME')['data']  # Время на сервере в виде строки hh:mi:ss
         try:  # Проверяем, можно ли привести полученные строки в дату и время
             return datetime.strptime(f'{d} {t}', '%d.%m.%Y %H:%M:%S')  # Переводим строки в дату и время и возвращаем ее
         except ValueError:  # Если нельзя привести полученные строки в дату и время
