@@ -1,6 +1,6 @@
+import logging  # Будем вести лог
 import collections
 from datetime import datetime, date
-import logging
 
 from backtrader import BrokerBase, Order, BuyOrder, SellOrder
 from backtrader.position import Position
@@ -19,65 +19,90 @@ class MetaQKBroker(BrokerBase.__class__):
 # noinspection PyProtectedMember,PyArgumentList
 class QKBroker(with_metaclass(MetaQKBroker, BrokerBase)):
     """Брокер QUIK"""
-    # TODO Сделать обертку для поддержки множества брокеров
-    # TODO Сделать пример постановки заявок по разным портфелям
-    # Обсуждение решения: https://community.backtrader.com/topic/1165/does-backtrader-support-multiple-brokers
-    # Пример решения: https://github.com/JacobHanouna/backtrader/blob/ccxt_multi_broker/backtrader/brokers/ccxtmultibroker.py
     logger = logging.getLogger('QKBroker')  # Будем вести лог
 
     params = (
-        ('use_positions', True),  # При запуске брокера подтягиваются текущие позиции с биржи
-        ('Lots', True),  # Входящий остаток в лотах (задается брокером)
-        ('ClientCode', ''),  # Код клиента
+        ('lots', True),  # Входящий остаток в лотах (задается брокером)
+        ('slippage_steps', 10),  # Кол-во шагов цены для проскальзывания
         # По статье https://zen.yandex.ru/media/id/5e9a612424270736479fad54/bitva-s-finam-624f12acc3c38f063178ca95
-        ('ClientCodeForOrders', ''),  # Номер торгового терминала. У брокера Финам требуется для совершения торговых операций
-        ('FirmId', 'SPBFUT'),  # Фирма
-        ('TradeAccountId', 'SPBFUT00PST'),  # Счет
-        ('LimitKind', 0),  # День лимита
-        ('CurrencyCode', 'SUR'),  # Валюта
-        ('IsFutures', True),  # Фьючерсный счет
+        ('client_code_for_orders', None),  # Номер торгового терминала. У брокера Финам требуется для совершения торговых операций
     )
 
     def __init__(self, **kwargs):
         super(QKBroker, self).__init__()
         self.store = QKStore(**kwargs)  # Хранилище QUIK
         self.notifs = collections.deque()  # Очередь уведомлений брокера о заявках
-        self.startingcash = self.cash = self.getcash()  # Стартовые и текущие свободные средства по счету
-        self.startingvalue = self.value = self.getvalue()  # Стартовый и текущий баланс счета
-        if not self.p.ClientCodeForOrders:  # Для брокера Финам нужно вместо кода клиента
-            self.p.ClientCodeForOrders = self.p.ClientCode  # указать Номер торгового терминала
-        self.trade_nums = dict()  # Список номеров сделок по тикеру для фильтрации дублей сделок
+        self.startingcash = self.cash = 0  # Стартовые и текущие все свободные средства
+        self.startingvalue = self.value = 0  # Стартовая и текущая стоимость всех позиций
+        self.trade_nums = {}  # Список номеров сделок по тикеру для фильтрации дублей сделок
         self.positions = collections.defaultdict(Position)  # Список позиций
         self.orders = collections.OrderedDict()  # Список заявок, отправленных на биржу
         self.ocos = {}  # Список связанных заявок (One Cancel Others)
         self.pcs = collections.defaultdict(collections.deque)  # Очередь всех родительских/дочерних заявок (Parent - Children)
 
-        self.store.provider.OnTransReply = self.on_trans_reply  # Ответ на транзакцию пользователя
-        self.store.provider.OnTrade = self.on_trade  # Получение новой / изменение существующей сделки
+        self.store.provider.on_trans_reply = self.on_trans_reply  # Ответ на транзакцию пользователя
+        self.store.provider.on_trade = self.on_trade  # Получение новой / изменение существующей сделки
 
     def start(self):
         super(QKBroker, self).start()
-        if self.p.use_positions:  # Если нужно при запуске брокера получить текущие позиции на бирже
-            self.get_all_active_positions(self.p.ClientCode, self.p.FirmId, self.p.LimitKind, self.p.Lots, self.p.IsFutures)  # То получаем их
+        self.get_all_active_positions()  # Получаем все активные позиции
 
-    def getcash(self):
-        """Свободные средства по счету"""
-        # TODO Если не находимся в режиме Live, то не делать запросы
-        if self.store.BrokerCls:  # Если брокер есть в хранилище
-            cash = self.get_money_limits(self.p.ClientCode, self.p.FirmId, self.p.TradeAccountId, self.p.LimitKind, self.p.CurrencyCode, self.p.IsFutures)  # Свободные средства по счету
-            if cash:  # Если свободные средства были получены
-                self.cash = cash  # то запоминаем их
+    def getcash(self, account_id=None):
+        """Свободные средства по всем счетам, по счету"""
+        if not self.store.BrokerCls:  # Если брокера нет в хранилище
+            return 0
+        money_limits = self.store.provider.get_money_limits()['data']  # Все денежные лимиты (остатки на счетах)
+        if len(money_limits) == 0:  # Если денежных лимитов нет
+            self.logger.error('getcash: QUIK не вернул денежные лимиты (остатки на счетах). Свяжитесь с брокером')
+            return 0
+        cash = 0  # Будем набирать свободные средства
+        for account in self.store.provider.accounts:  # Пробегаемся по всем счетам (Коды клиента/Фирма/Счет)
+            if account_id is not None and account != self.store.provider.accounts[account_id]:  # Если считаем свободные средства по счету, и это не требуемый счет
+                continue  # то переходим к следующему счету, дальше не продолжаем
+            if account['futures']:  # Для фьючерсов
+                # Видео: https://www.youtube.com/watch?v=u2C7ElpXZ4k
+                # Баланс = Лимит откр.поз. + Вариац.маржа + Накоплен.доход
+                # Лимит откр.поз. = Сумма, которая была на счету вчера в 19:00 МСК (после вечернего клиринга)
+                # Вариац.маржа = Рассчитывается с 19:00 предыдущего дня без учета комисии. Перейдет в Накоплен.доход и обнулится в 14:00 (на дневном клиринге)
+                # Накоплен.доход включает Биржевые сборы
+                # Тек.чист.поз. = Заблокированное ГО под открытые позиции
+                # План.чист.поз. = На какую сумму можете открыть еще позиции
+                try:
+                    futures_limit = self.store.provider.get_futures_limit(account['firm_id'], account['trade_account_id'], 0, self.store.provider.currency)['data']  # Фьючерсные лимиты по денежным средствам (limit_type=0)
+                    cash += futures_limit['cbplimit'] + futures_limit['varmargin'] + futures_limit['accruedint']  # Добавляем свободные средства = Лимит откр.поз. + Вариац.маржа + Накоплен.доход
+                except Exception:  # При ошибке Futures limit returns nil
+                    self.logger.error(f'getcash: QUIK не вернул фьючерсные лимиты с firm_id={account["firm_id"]}, trade_account_id={account["trade_account_id"]}. Проверьте правильность значений')
+            else:  # Для остальных фирм
+                current_balance = next((money_limit['currentbal'] for money_limit in money_limits  # Из всех денежных лимитов
+                                       if money_limit['client_code'] == account['client_code'] and  # выбираем по коду клиента
+                                       money_limit['firmid'] == account['firm_id'] and  # фирме
+                                       money_limit['limit_kind'] == self.store.provider.limit_kind and  # дню лимита
+                                       money_limit['currcode'] == self.store.provider.currency),  # и валюте
+                                       None)  # получаем денежный лимит (остаток) по счету если он есть
+                if current_balance is None:  # Если денежный лимит не найден
+                    self.logger.error(f'getcash: Денежный лимит не найден с client_code={account["client_code"]}, firmid={account["firm_id"]}, limit_kind={self.store.provider.limit_kind}, currcode={self.store.provider.currency}. Проверьте правильность значений')
+                else:  # Денежный лимит найден
+                    cash += current_balance  # Добавляем свободные средства = денежный лимит
+        if account_id is None and cash:  # Если были получены все свободные средства
+            self.cash = cash  # то сохраняем все свободные средства
         return self.cash
 
-    def getvalue(self, datas=None):
-        """Стоимость позиций по счету"""
-        # TODO Если не находимся в режиме Live, то не делать запросы
-        # TODO Выдавать баланс по тикерам (datas) как в Alor
-        # TODO Выдавать весь баланс, если не указан параметры. Иначе, выдавать баланс по параметрам
-        if self.store.BrokerCls:  # Если брокер есть в хранилище
-            v = self.get_positions_limits(self.p.FirmId, self.p.TradeAccountId, self.p.IsFutures)  # Стоимость позиций по счету
-            if v:  # Если стоимость позиций была получена
-                self.value = v  # Баланс счета = свободные средства + стоимость позиций
+    def getvalue(self, datas=None, account_id=None):
+        """Стоимость всех позиций, позиции/позиций, по счету"""
+        if not self.store.BrokerCls:  # Если брокера нет в хранилище
+            return 0
+        value = 0  # Будем набирать стоимость позиций
+        for dataname, position in list(self.positions.items()):  # Пробегаемся по копии позиций (чтобы не было ошибки при изменении позиций)
+            if datas and not next((data for data in datas if data._name == dataname), None):  # Если смотрим стоимость позиции/позиций, и это не заданный тикер
+                continue  # то переходим к следующей позиции, дальше не продолжаем
+            class_code, sec_code = self.store.provider.dataname_to_class_sec_codes(dataname)  # Получаем код режима торгов и тикер из названия тикера
+            account = next((account for account in self.store.provider.accounts if class_code in account['class_codes']), None)  # По коду режима находим счет
+            if account_id is not None and account != self.store.provider.accounts[account_id]:  # Если смотрим стоимость по счету, и это не заданный счет
+                continue  # то переходим к следующей позиции, дальше не продолжаем
+            last_price = self.store.provider.quik_price_to_price(class_code, sec_code, float(self.store.provider.get_param_ex(class_code, sec_code, 'LAST')['data']['param_value']))  # Последняя цена сделки
+            value += position.size * last_price  # Добавляем стоимость позиции
+        if datas is None and account_id is None and value:  # Если была получена стоимость всех позиций
+            self.value = value  # то сохраняем стоимость всех позиций
         return self.value
 
     def getposition(self, data):
@@ -91,13 +116,13 @@ class QKBroker(with_metaclass(MetaQKBroker, BrokerBase)):
 
     def buy(self, owner, data, size, price=None, plimit=None, exectype=None, valid=None, tradeid=0, oco=None, trailamount=None, trailpercent=None, parent=None, transmit=True, **kwargs):
         """Заявка на покупку"""
-        order = self.create_order(owner, data, size, price, plimit, exectype, valid, oco, parent, transmit, True, ClientCode=self.p.ClientCodeForOrders, TradeAccountId=self.p.TradeAccountId, **kwargs)
+        order = self.create_order(owner, data, size, price, plimit, exectype, valid, oco, parent, transmit, True, **kwargs)
         self.notifs.append(order.clone())  # Уведомляем брокера об отправке новой заявки на покупку на биржу
         return order
 
     def sell(self, owner, data, size, price=None, plimit=None, exectype=None, valid=None, tradeid=0, oco=None, trailamount=None, trailpercent=None, parent=None, transmit=True, **kwargs):
         """Заявка на продажу"""
-        order = self.create_order(owner, data, size, price, plimit, exectype, valid, oco, parent, transmit, False, ClientCode=self.p.ClientCodeForOrders, TradeAccountId=self.p.TradeAccountId, **kwargs)
+        order = self.create_order(owner, data, size, price, plimit, exectype, valid, oco, parent, transmit, False, **kwargs)
         self.notifs.append(order.clone())  # Уведомляем брокера об отправке новой заявки на продажу на биржу
         return order
 
@@ -115,141 +140,75 @@ class QKBroker(with_metaclass(MetaQKBroker, BrokerBase)):
 
     def stop(self):
         super(QKBroker, self).stop()
-        self.store.provider.OnConnected = self.store.provider.DefaultHandler  # Соединение терминала с сервером QUIK
-        self.store.provider.OnDisconnected = self.store.provider.DefaultHandler  # Отключение терминала от сервера QUIK
-        self.store.provider.OnTransReply = self.store.provider.DefaultHandler  # Ответ на транзакцию пользователя
-        self.store.provider.OnTrade = self.store.provider.DefaultHandler  # Получение новой / изменение существующей сделки
+        self.store.provider.on_connected = self.store.provider.default_handler  # Соединение терминала с сервером QUIK
+        self.store.provider.on_disconnected = self.store.provider.default_handler  # Отключение терминала от сервера QUIK
+        self.store.provider.on_trans_reply = self.store.provider.default_handler  # Ответ на транзакцию пользователя
+        self.store.provider.on_trade = self.store.provider.default_handler  # Получение новой / изменение существующей сделки
         self.store.BrokerCls = None  # Удаляем класс брокера из хранилища
 
     # Функции
 
-    def get_all_active_positions(self, client_code, firm_id, limit_kind, is_lots, is_futures=False):
-        """Все активные позиции по счету
-
-        :param str client_code: Код клиента
-        :param str firm_id: Код фирмы
-        :param int limit_kind: День лимита
-        :param bool is_lots: Входящий остаток в лотах
-        :param bool is_futures: Фьючерсный счет
-        """
-        if is_futures:  # Для фьючерсов свои расчеты
-            futures_holdings = self.store.provider.GetFuturesHoldings()['data']  # Все фьючерсные позиции
-            active_futures_holdings = [futures_holding for futures_holding in futures_holdings if futures_holding['totalnet'] != 0]  # Активные фьючерсные позиции
-            for active_futures_holding in active_futures_holdings:  # Пробегаемся по всем активным фьючерсным позициям
-                class_code = 'SPBFUT'  # Код площадки
-                sec_code = active_futures_holding['sec_code']  # Код тикера
-                dataname = self.store.class_sec_code_to_data_name(class_code, sec_code)  # Получаем название тикера по коду площадки и коду тикера
-                size = active_futures_holding['totalnet']  # Кол-во
-                if is_lots:  # Если входящий остаток в лотах
-                    size = self.store.lots_to_size(class_code, sec_code, size)  # то переводим кол-во из лотов в штуки
-                price = float(active_futures_holding['avrposnprice'])  # Цена приобретения
-                price = self.store.quik_to_bt_price(class_code, sec_code, price)  # Переводим цену приобретения за лот в цену приобретения за штуку
-                self.positions[dataname] = Position(size, price)  # Сохраняем в списке открытых позиций
-        else:  # Для остальных фирм
-            depo_limits = self.store.provider.GetAllDepoLimits()['data']  # Все лимиты по бумагам (позиции по инструментам)
-            account_depo_limits = [depo_limit for depo_limit in depo_limits  # Бумажный лимит
-                                   if depo_limit['client_code'] == client_code and  # выбираем по коду клиента
-                                   depo_limit['firmid'] == firm_id and  # фирме
-                                   depo_limit['limit_kind'] == limit_kind and  # дню лимита
-                                   depo_limit['currentbal'] != 0]  # только открытые позиции
-            for firm_kind_depo_limit in account_depo_limits:  # Пробегаемся по всем позициям
-                dataname = firm_kind_depo_limit['sec_code']  # В позициях код тикера указывается без кода площадки
-                class_code, sec_code = self.store.data_name_to_class_sec_code(dataname)  # По коду тикера без площадки получаем код площадки и код тикера
-                size = int(firm_kind_depo_limit['currentbal'])  # Кол-во
-                if is_lots:  # Если входящий остаток в лотах
-                    size = self.store.lots_to_size(class_code, sec_code, size)  # то переводим кол-во из лотов в штуки
-                price = float(firm_kind_depo_limit['wa_position_price'])  # Цена приобретения
-                price = self.store.quik_to_bt_price(class_code, sec_code, price)  # Для рынка облигаций цену приобретения умножаем на 10
-                dataname = self.store.class_sec_code_to_data_name(class_code, sec_code)  # Получаем название тикера по коду площадки и коду тикера
-                self.positions[dataname] = Position(size, price)  # Сохраняем в списке открытых позиций
-
-    def get_money_limits(self, client_code, firm_id, trade_account_id, limit_kind, currency_code, is_futures=False):
-        """Свободные средства по счету
-
-        :param str client_code: Код клиента
-        :param str firm_id: Код фирмы
-        :param str trade_account_id: Счет
-        :param int limit_kind: День лимита
-        :param str currency_code: Валюта
-        :param bool is_futures: Фьючерсный счет
-        :return: Свободные средства по счету или None
-        """
-        if is_futures:  # Для фьючерсов свои расчеты
-            # Видео: https://www.youtube.com/watch?v=u2C7ElpXZ4k
-            # Баланс = Лимит откр.поз. + Вариац.маржа + Накоплен.доход
-            # Лимит откр.поз. = Сумма, которая была на счету вчера в 19:00 МСК (после вечернего клиринга)
-            # Вариац.маржа = Рассчитывается с 19:00 предыдущего дня без учета комисии. Перейдет в Накоплен.доход и обнулится в 14:00 (на дневном клиринге)
-            # Накоплен.доход включает Биржевые сборы
-            # Тек.чист.поз. = Заблокированное ГО под открытые позиции
-            # План.чист.поз. = На какую сумму можете открыть еще позиции
-            try:
-                futures_limit = self.store.provider.GetFuturesLimit(firm_id, trade_account_id, 0, 'SUR')['data']  # Фьючерсные лимиты
-                return float(futures_limit['cbplimit']) + float(futures_limit['varmargin']) + float(futures_limit['accruedint'])  # Лимит откр.поз. + Вариац.маржа + Накоплен.доход
-            except Exception:  # При ошибке Futures limit returns nil
-                print(f'QUIK не вернул фьючерсные лимиты с FirmId={firm_id}, TradeAccountId={trade_account_id}. Проверьте правильность значений')
-                return None
-        # Для остальных фирм
-        money_limits = self.store.provider.GetMoneyLimits()['data']  # Все денежные лимиты (остатки на счетах)
-        if len(money_limits) == 0:  # Если денежных лимитов нет
-            print('QUIK не вернул денежные лимиты (остатки на счетах). Свяжитесь с брокером')
-            return None
-        cash = [money_limit for money_limit in money_limits  # Из всех денежных лимитов
-                if money_limit['client_code'] == client_code and  # выбираем по коду клиента
-                money_limit['firmid'] == firm_id and  # фирме
-                money_limit['limit_kind'] == limit_kind and  # дню лимита
-                money_limit["currcode"] == currency_code]  # и валюте
-        if len(cash) != 1:  # Если ни один денежный лимит не подходит
-            print(f'Денежный лимит не найден с ClientCode={client_code}, FirmId={firm_id}, LimitKind={limit_kind}, CurrencyCode={currency_code}. Проверьте правильность значений')
-            # print(f'Полученные денежные лимиты: {money_limits}')  # Для отладки, если нужно разобраться, что указано неверно
-            return None
-        return float(cash[0]['currentbal'])  # Денежный лимит (остаток) по счету
-
-    def get_positions_limits(self, firm_id, trade_account_id, is_futures=False):
-        """
-        Стоимость позиций по счету
-
-        :param str firm_id: Код фирмы
-        :param str trade_account_id: Счет
-        :param bool is_futures: Фьючерсный счет
-        :return: Стоимость позиций по счету или None
-        """
-        if is_futures:  # Для фьючерсов свои расчеты
-            try:
-                return float(self.store.provider.GetFuturesLimit(firm_id, trade_account_id, 0, 'SUR')['data']['cbplused'])  # Тек.чист.поз. (Заблокированное ГО под открытые позиции)
-            except Exception:  # При ошибке Futures limit returns nil
-                return None
-        # Для остальных фирм
-        pos_value = 0  # Стоимость позиций по счету
-        for dataname in list(self.positions.keys()):  # Пробегаемся по копии позиций (чтобы не было ошибки при изменении позиций)
-            class_code, sec_code = self.store.data_name_to_class_sec_code(dataname)  # По названию тикера получаем код площадки и код тикера
-            last_price = float(self.store.provider.GetParamEx(class_code, sec_code, 'LAST')['data']['param_value'])  # Последняя цена сделки
-            last_price = self.store.quik_to_bt_price(class_code, sec_code, last_price)  # Для рынка облигаций последнюю цену сделки умножаем на 10
-            pos = self.positions[dataname]  # Получаем позицию по тикеру
-            pos_value += pos.size * last_price  # Добавляем стоимость позиции
-        return pos_value  # Стоимость позиций по счету
+    def get_all_active_positions(self):
+        """Все активные позиции"""
+        for account in self.store.provider.accounts:  # Пробегаемся по всем счетам (Коды клиента/Фирма/Счет)
+            if account['futures']:  # Для фьючерсов
+                active_futures_holdings = [futures_holding for futures_holding in self.store.provider.get_futures_holdings()['data'] if futures_holding['totalnet'] != 0]  # Активные фьючерсные позиции
+                for active_futures_holding in active_futures_holdings:  # Пробегаемся по всем активным фьючерсным позициям
+                    class_code = 'SPBFUT'  # Код режима торгов для фьючерсов
+                    sec_code = active_futures_holding['sec_code']  # Код тикера
+                    dataname = self.store.provider.class_sec_codes_to_dataname(class_code, sec_code)  # Получаем название тикера по коду режима торгов и тикера
+                    size = int(active_futures_holding['totalnet'])  # Кол-во
+                    if self.p.lots:  # Если входящий остаток в лотах
+                        size = self.store.provider.lots_to_size(class_code, sec_code, size)  # то переводим кол-во из лотов в штуки
+                    price = self.store.provider.quik_price_to_price(class_code, sec_code, float(active_futures_holding['avrposnprice']))  # Переводим эффективную цену позиций (входа) в цену
+                    self.positions[dataname] = Position(size, price)  # Сохраняем в списке открытых позиций
+            else:  # Для остальных фирм
+                depo_limits = self.store.provider.get_all_depo_limits()['data']  # Все лимиты по бумагам (позиции по инструментам)
+                account_depo_limits = [depo_limit for depo_limit in depo_limits  # Бумажный лимит
+                                       if depo_limit['client_code'] == account['client_code'] and  # выбираем по коду клиента
+                                       depo_limit['firmid'] == account['firm_id'] and  # фирме
+                                       depo_limit['limit_kind'] == self.store.provider.limit_kind and  # дню лимита
+                                       depo_limit['currentbal'] != 0]  # только открытые позиции
+                for firm_kind_depo_limit in account_depo_limits:  # Пробегаемся по всем позициям
+                    class_code, sec_code = self.store.provider.dataname_to_class_sec_codes(firm_kind_depo_limit['sec_code'])  # По коду тикера без кода режима торгов получаем код режима торгов и тикера
+                    dataname = self.store.provider.class_sec_codes_to_dataname(class_code, sec_code)  # Получаем название тикера по коду режима торгов и тикера
+                    size = int(firm_kind_depo_limit['currentbal'])  # Кол-во
+                    if self.p.lots:  # Если входящий остаток в лотах
+                        size = self.store.provider.lots_to_size(class_code, sec_code, size)  # то переводим кол-во из лотов в штуки
+                    price = self.store.provider.quik_price_to_price(class_code, sec_code, float(firm_kind_depo_limit['wa_position_price']))  # Переводим средневзвешенную цену приобретения позиции (входа) в цену
+                    self.positions[dataname] = Position(size, price)  # Сохраняем в списке открытых позиций
 
     def create_order(self, owner, data, size, price=None, plimit=None, exectype=None, valid=None, oco=None, parent=None, transmit=True, is_buy=True, **kwargs):
         """Создание заявки. Привязка параметров счета и тикера. Обработка связанных и родительской/дочерних заявок"""
         order = BuyOrder(owner=owner, data=data, size=size, price=price, pricelimit=plimit, exectype=exectype, valid=valid, oco=oco, parent=parent, transmit=transmit) if is_buy \
             else SellOrder(owner=owner, data=data, size=size, price=price, pricelimit=plimit, exectype=exectype, valid=valid, oco=oco, parent=parent, transmit=transmit)  # Заявка на покупку/продажу
         order.addcomminfo(self.getcommissioninfo(data))  # По тикеру выставляем комиссии в заявку. Нужно для исполнения заявки в BackTrader
-        order.addinfo(**kwargs)  # Передаем в заявку все дополнительные свойства из брокера, в т.ч. ClientCode, TradeAccountId, StopOrderKind
-        class_code, sec_code = self.store.data_name_to_class_sec_code(data._name)  # Из названия тикера получаем код площадки и тикера
-        order.addinfo(ClassCode=class_code, SecCode=sec_code)  # Код площадки ClassCode и тикера SecCode
-        si = self.store.get_symbol_info(class_code, sec_code)  # Получаем параметры тикера (min_price_step, scale)
-        if not si:  # Если тикер не найден
-            print(f'Постановка заявки {order.ref} по тикеру {class_code}.{sec_code} отменена. Тикер не найден')
+        order.addinfo(**kwargs)  # Передаем в заявку все дополнительные свойства из брокера, в т.ч. account_id
+        class_code, sec_code = self.store.provider.dataname_to_class_sec_codes(data._name)  # Из названия тикера получаем код режима торгов и тикера
+        order.addinfo(class_code=class_code, sec_code=sec_code)  # Передаем в заявку код режима торгов и тикера
+        if 'account_id' in order.info:  # Если передали номер счета
+            account = self.store.provider.accounts[order.info['account_id']]  # то получаем счет по номеру
+            if class_code not in account['class_codes']:  # Если в этом счете нет режима торгов тикера
+                account = None  # то счет не найден
+        else:  # Если не передали номер счета
+            account = next((account for account in self.store.provider.accounts if class_code in account['class_codes']), None)  # то ищем первый счет с режимом торгов тикера
+        if not account:  # Если счет не найден
+            self.logger.error(f'create_order: Постановка заявки {order.ref} по тикеру {class_code}.{sec_code} отменена. Не найден счет для режима торгов {class_code}')
             order.reject(self)  # то отменяем заявку (статус Order.Rejected)
             return order  # Возвращаем отмененную заявку
-        order.addinfo(MinPriceStep=float(si['min_price_step']))  # Минимальный шаг цены
-        order.addinfo(Slippage=float(si['min_price_step']) * self.store.p.StopSteps)  # Размер проскальзывания в деньгах Slippage
-        order.addinfo(Scale=int(si['scale']))  # Кол-во значащих цифр после запятой Scale
+        order.addinfo(account=account)  # Передаем в заявку счет
+        si = self.store.provider.get_symbol_info(class_code, sec_code)  # Получаем параметры тикера (min_price_step, scale)
+        if not si:  # Если тикер не найден
+            self.logger.error(f'create_order: Постановка заявки {order.ref} по тикеру {class_code}.{sec_code} отменена. Тикер не найден')
+            order.reject(self)  # то отменяем заявку (статус Order.Rejected)
+            return order  # Возвращаем отмененную заявку
+        order.addinfo(min_price_step=float(si['min_price_step']))  # Передаем в заявку минимальный шаг цены
         if oco:  # Если есть связанная заявка
             self.ocos[order.ref] = oco.ref  # то заносим в список связанных заявок
         if not transmit or parent:  # Для родительской/дочерних заявок
             parent_ref = getattr(order.parent, 'ref', order.ref)  # Номер транзакции родительской заявки или номер заявки, если родительской заявки нет
             if order.ref != parent_ref and parent_ref not in self.pcs:  # Если есть родительская заявка, но она не найдена в очереди родительских/дочерних заявок
-                print(f'Постановка заявки {order.ref} по тикеру {class_code}.{sec_code} отменена. Родительская заявка не найдена')
+                self.logger.error(f'create_order: Постановка заявки {order.ref} по тикеру {class_code}.{sec_code} отменена. Родительская заявка не найдена')
                 order.reject(self)  # то отменяем заявку (статус Order.Rejected)
                 return order  # Возвращаем отмененную заявку
             pcs = self.pcs[parent_ref]  # В очередь к родительской заявке
@@ -265,67 +224,55 @@ class QKBroker(with_metaclass(MetaQKBroker, BrokerBase)):
 
     def place_order(self, order):
         """Отправка заявки (транзакции) на биржу"""
-        class_code = order.info['ClassCode']  # Код площадки
-        sec_code = order.info['SecCode']  # Код тикера
-        size = abs(self.store.size_to_lots(class_code, sec_code, order.size))  # Размер позиции в лотах. В QUIK всегда передается положительный размер лота
+        class_code = order.info['class_code']  # Получаем из заявки код режима торгов
+        sec_code = order.info['sec_code']  # Получаем из заявки код тикера
+        quantity = abs(self.store.provider.size_to_lots(class_code, sec_code, order.size))  # Размер позиции в лотах. В QUIK всегда передается положительный размер лота
         price = order.price  # Цена заявки
-        if not price:  # Если цена не указана для рыночных заявок
-            price = 0.00  # Цена рыночной заявки должна быть нулевой (кроме фьючерсов)
-        slippage = order.info['Slippage']  # Размер проскальзывания в деньгах
-        if slippage.is_integer():  # Целое значение проскальзывания мы должны отправлять без десятичных знаков
-            slippage = int(slippage)  # поэтому, приводим такое проскальзывание к целому числу
+        min_price_step = order.info['min_price_step']  # Получаем из заявки минимальный шаг цены
+        slippage = min_price_step * self.p.slippage_steps  # Размер проскальзывания в деньгах для выставления рыночной цены фьючерсов
         if order.exectype == Order.Market:  # Для рыночных заявок
+            price = 0.00  # Цена рыночной заявки должна быть нулевой (кроме рынка фьючерсов)
             if class_code == 'SPBFUT':  # Для рынка фьючерсов
-                last_price = float(self.store.provider.GetParamEx(class_code, sec_code, 'LAST')['data']['param_value'])  # Последняя цена сделки
+                last_price = float(self.store.provider.get_param_ex(class_code, sec_code, 'LAST')['data']['param_value'])  # Последняя цена сделки
                 price = last_price + slippage if order.isbuy() else last_price - slippage  # Из документации QUIK: При покупке/продаже фьючерсов по рынку нужно ставить цену хуже последней сделки
+                price = int(price) if price.is_integer() else price  # Целое значение мы должны отправлять без десятичных знаков. Поэтому, если возможно, приводим цену к целому числу
         else:  # Для остальных заявок
-            price = self.store.bt_to_quik_price(class_code, sec_code, price)  # Переводим цену из BackTrader в QUIK
-        scale = order.info['Scale']  # Кол-во значащих цифр после запятой
-        price = round(price, scale)  # Округляем цену до кол-ва значащих цифр
-        if price.is_integer():  # Целое значение цены мы должны отправлять без десятичных знаков
-            price = int(price)  # поэтому, приводим такую цену к целому числу
+            price = self.store.provider.price_to_quik_price(class_code, sec_code, price)  # Переводим цену в цену QUIK
         transaction = {  # Все значения должны передаваться в виде строк
             'TRANS_ID': str(order.ref),  # Номер транзакции задается клиентом
-            'CLIENT_CODE': order.info['ClientCode'],  # Код клиента. Для фьючерсов его нет
-            'ACCOUNT': order.info['TradeAccountId'],  # Счет
-            'CLASSCODE': class_code,  # Код площадки
+            # Если для заявок брокер устанавливает отдельный код клиента, то задаем его в параметре client_code_for_orders, и используем здесь
+            # В остальных случаях получаем код клиента из заявки (счета). Для фьючерсов кода клиента нет
+            'CLIENT_CODE': self.p.client_code_for_orders if self.p.client_code_for_orders else order.info['account']['client_code'],
+            'ACCOUNT': order.info['account']['trade_account_id'],  # Получаем из заявки счет
+            'CLASSCODE': class_code,  # Код режима торгов
             'SECCODE': sec_code,  # Код тикера
             'OPERATION': 'B' if order.isbuy() else 'S',  # B = покупка, S = продажа
-            'PRICE': str(price),  # Цена исполнения
-            'QUANTITY': str(size)}  # Кол-во в лотах
-        if order.exectype in [Order.Stop, Order.StopLimit]:  # Для стоп заявок
+            'QUANTITY': str(quantity)}  # Кол-во в лотах
+        if order.exectype in [Order.Market, Order.Limit]:  # Для рыночной/лимитной заявки
+            transaction['ACTION'] = 'NEW_ORDER'  # Новая рыночная или лимитная заявка
+            transaction['TYPE'] = 'L' if order.exectype == Order.Limit else 'M'  # L = лимитная заявка (по умолчанию), M = рыночная заявка
+            transaction['PRICE'] = str(price)  # Цена исполнения
+        else:  # Для стоп/стоп лимитной заявки
             transaction['ACTION'] = 'NEW_STOP_ORDER'  # Новая стоп заявка
             transaction['STOPPRICE'] = str(price)  # Стоп цена срабатывания
-            plimit = order.pricelimit  # Лимитная цена исполнения
-            if plimit:  # Если задана лимитная цена исполнения
-                plimit = self.store.bt_to_quik_price(class_code, sec_code, plimit)  # Переводим цену из BackTrader в QUIK
-                limit_price = round(plimit, scale)  # то ее и берем, округлив цену до кол-ва значащих цифр
-            elif order.isbuy():  # Если цена не задана, и покупаем
-                limit_price = round(price + slippage, scale)  # то будем покупать по большей цене в размер проскальзывания
-            else:  # Если цена не задана, и продаем
-                limit_price = round(price - slippage, scale)  # то будем продавать по меньшей цене в размер проскальзывания
+            if order.exectype == Order.Stop:  # Для стоп заявки
+                stop_market_price = 0.00  # Цена рыночной заявки должна быть нулевой (кроме рынка фьючерсов)
+                if class_code == 'SPBFUT':  # Для рынка фьючерсов
+                    stop_market_price = price + slippage if order.isbuy() else price - slippage  # Из документации QUIK: При покупке/продаже фьючерсов по рынку нужно ставить цену хуже последней сделки
+                    stop_market_price = int(stop_market_price) if stop_market_price.is_integer() else stop_market_price  # Целое значение мы должны отправлять без десятичных знаков. Поэтому, если возможно, приводим цену к целому числу
+                transaction['PRICE'] = str(stop_market_price)  # Цена рыночной заявки
+            else:  # Для стоп лимитной заявки
+                transaction['PRICE'] = str(self.store.provider.price_to_quik_price(class_code, sec_code, order.pricelimit))  # Переводим цену в цену QUIK
             expiry_date = 'GTC'  # По умолчанию будем держать заявку до отмены GTC = Good Till Cancelled
             if order.valid in [Order.DAY, 0]:  # Если заявка поставлена на день
                 expiry_date = 'TODAY'  # то будем держать ее до окончания текущей торговой сессии
             elif isinstance(order.valid, date):  # Если заявка поставлена до даты
                 expiry_date = order.valid.strftime('%Y%m%d')  # то будем держать ее до указанной даты
             transaction['EXPIRY_DATE'] = expiry_date  # Срок действия стоп заявки
-            if order.info['StopOrderKind'] == 'TAKE_PROFIT_STOP_ORDER':  # Если тип стоп заявки это тейк профит
-                min_price_step = order.info['MinPriceStep']  # Минимальный шаг цены
-                transaction['STOP_ORDER_KIND'] = order.info['StopOrderKind']  # Тип заявки TAKE_PROFIT_STOP_ORDER
-                transaction['SPREAD_UNITS'] = 'PRICE_UNITS'  # Единицы измерения защитного спрэда в параметрах цены (шаг изменения равен шагу цены по данному инструменту)
-                transaction['SPREAD'] = f'{min_price_step:.{scale}f}'  # Размер защитного спрэда. Переводим в строку, чтобы избежать научной записи числа шага цены. Например, 5e-6 для ВТБ
-                transaction['OFFSET_UNITS'] = 'PRICE_UNITS'  # Единицы измерения отступа в параметрах цены (шаг изменения равен шагу цены по данному инструменту)
-                transaction['OFFSET'] = f'{min_price_step:.{scale}f}'  # Размер отступа. Переводим в строку, чтобы избежать научной записи числа шага цены. Например, 5e-6 для ВТБ
-            else:  # Для обычных стоп заявок
-                transaction['PRICE'] = str(limit_price)  # Лимитная цена исполнения
-        else:  # Для рыночных или лимитных заявок
-            transaction['ACTION'] = 'NEW_ORDER'  # Новая рыночная или лимитная заявка
-            transaction['TYPE'] = 'L' if order.exectype == Order.Limit else 'M'  # L = лимитная заявка (по умолчанию), M = рыночная заявка
-        response = self.store.provider.SendTransaction(transaction)  # Отправляем транзакцию на биржу
+        response = self.store.provider.send_transaction(transaction)  # Отправляем транзакцию на биржу
         order.submit(self)  # Отправляем заявку на биржу (Order.Submitted)
         if response['cmd'] == 'lua_transaction_error':  # Если возникла ошибка при постановке заявки на уровне QUIK
-            print(f'Ошибка отправки заявки в QUIK {response["data"]["CLASSCODE"]}.{response["data"]["SECCODE"]} {response["lua_error"]}')  # то заявка не отправляется на биржу, выводим сообщение об ошибке
+            self.logger.error(f'place_order: Ошибка отправки заявки в QUIK {response["data"]["CLASSCODE"]}.{response["data"]["SECCODE"]} {response["lua_error"]}')  # то заявка не отправляется на биржу, выводим сообщение об ошибке
             order.reject(self)  # Отклоняем заявку (Order.Rejected)
         self.orders[order.ref] = order  # Сохраняем заявку в списке заявок, отправленных на биржу
         return order  # Возвращаем заявку
@@ -336,21 +283,19 @@ class QKBroker(with_metaclass(MetaQKBroker, BrokerBase)):
             return  # то выходим, дальше не продолжаем
         if order.ref not in self.orders:  # Если заявка не найдена
             return  # то выходим, дальше не продолжаем
-        order_num = order.info['order_num']  # Номер заявки на бирже
-        class_code, sec_code = self.store.data_name_to_class_sec_code(order.data._name)  # По названию тикера получаем код площадки и код тикера
-        is_stop = order.exectype in [Order.Stop, Order.StopLimit] and \
-            isinstance(self.store.provider.GetOrderByNumber(order_num)['data'], int)  # Задана стоп заявка и лимитная заявка не выставлена
+        order_num = order.info['order_num']  # Получаем из заявки номер заявки на бирже
+        is_stop = order.exectype in [Order.Stop, Order.StopLimit] and isinstance(self.store.provider.get_order_by_number(order_num)['data'], int)  # Задана стоп заявка и лимитная заявка не выставлена
         transaction = {
             'TRANS_ID': str(order.ref),  # Номер транзакции задается клиентом
-            'CLASSCODE': class_code,  # Код площадки
-            'SECCODE': sec_code}  # Код тикера
+            'CLASSCODE': order.info['class_code'],  # Получаем из заявки код режима торгов
+            'SECCODE': order.info['sec_code']}  # Получаем из заявки код тикера
         if is_stop:  # Для стоп заявки
             transaction['ACTION'] = 'KILL_STOP_ORDER'  # Будем удалять стоп заявку
             transaction['STOP_ORDER_KEY'] = str(order_num)  # Номер стоп заявки на бирже
         else:  # Для лимитной заявки
             transaction['ACTION'] = 'KILL_ORDER'  # Будем удалять лимитную заявку
             transaction['ORDER_KEY'] = str(order_num)  # Номер заявки на бирже
-        self.store.provider.SendTransaction(transaction)  # Отправляем транзакцию на биржу
+        self.store.provider.send_transaction(transaction)  # Отправляем транзакцию на биржу
         return order  # В список уведомлений ничего не добавляем. Ждем события OnTransReply
 
     def oco_pc_check(self, order):
@@ -378,24 +323,24 @@ class QKBroker(with_metaclass(MetaQKBroker, BrokerBase)):
 
     def on_trans_reply(self, data):
         """Обработчик события ответа на транзакцию пользователя"""
-        self.logger.debug(f'on_trans_reply: data={data}')
+        self.logger.debug(f'on_trans_reply: data={data}')  # Для отладки
         qk_trans_reply = data['data']  # Ответ на транзакцию
         order_num = int(qk_trans_reply['order_num'])  # Номер заявки на бирже
         trans_id = int(qk_trans_reply['trans_id'])  # Номер транзакции заявки
         if trans_id == 0:  # Заявки, выставленные не из автоторговли / только что (с нулевыми номерами транзакции)
-            self.logger.debug(f'on_trans_reply: Заявка с номером {order_num}. Номер транзакции 0. Выход')
+            self.logger.debug(f'on_trans_reply: Заявка с номером {order_num} выставлена не из автоторговли / только что. Выход')
             return  # не обрабатываем, пропускаем
         if trans_id not in self.orders:  # Пришла заявка не из автоторговли
-            self.logger.debug(f'on_trans_reply: Заявка с номером {order_num}. Номер транзакции {trans_id} был выставлен не из торговой системы. Выход')
+            self.logger.debug(f'on_trans_reply: Заявка с номером {order_num}. Номер транзакции {trans_id}. Заявка была выставлена не из торговой системы. Выход')
             return  # не обрабатываем, пропускаем
         order: Order = self.orders[trans_id]  # Ищем заявку по номеру транзакции
-        order.addinfo(order_num=order_num)  # Сохраняем номер заявки на бирже
-        self.logger.debug(f'on_trans_reply: Заявка с номером {order_num}. order={order}')
+        order.addinfo(order_num=order_num)  # Передаем в заявку номер заявки на бирже
+        self.logger.debug(f'on_trans_reply: Заявка {order.ref} с номером {order_num}. Номер транзакции {trans_id}. order={order}')
         # TODO Есть поле flags, но оно не документировано. Лучше вместо текстового результата транзакции разбирать по нему
         result_msg = str(qk_trans_reply['result_msg']).lower()  # По результату исполнения транзакции (очень плохое решение)
         status = int(qk_trans_reply['status'])  # Статус транзакции
         if status == 15 or 'зарегистрирован' in result_msg:  # Если пришел ответ по новой заявке
-            self.logger.debug(f'on_trans_reply: Перевод заявки с номером {order_num} в статус принята на бирже (Order.Accepted)')
+            self.logger.debug(f'on_trans_reply: Заявка {order.ref} переведена в статус принята на бирже (Order.Accepted)')
             order.accept(self)  # Заявка принята на бирже (Order.Accepted)
         elif 'снят' in result_msg:  # Если пришел ответ по отмене существующей заявки
             try:  # TODO В BT очень редко при order.cancel() возникает ошибка:
@@ -404,7 +349,7 @@ class QKBroker(with_metaclass(MetaQKBroker, BrokerBase)):
                 #    linebuffer.py, line 163, in __getitem__
                 #    return self.array[self.idx + ago]
                 #    IndexError: array index out of range
-                self.logger.debug(f'on_trans_reply: Перевод заявки с номером {order_num} в статус отменена (Order.Canceled)')
+                self.logger.debug(f'on_trans_reply: Заявка {order.ref} переведена в статус отменена (Order.Canceled)')
                 order.cancel()  # Отменяем существующую заявку (Order.Canceled)
             except (KeyError, IndexError):  # При ошибке
                 order.status = Order.Canceled  # все равно ставим статус заявки Order.Canceled
@@ -414,7 +359,7 @@ class QKBroker(with_metaclass(MetaQKBroker, BrokerBase)):
             # - Превышен лимит отправки транзакций для данного логина
             if status == 4 and 'не найдена заявка' in result_msg or \
                status == 5 and 'не можете снять' in result_msg or 'превышен лимит' in result_msg:
-                self.logger.debug(f'on_trans_reply: Ошибка заявки с номером {order_num}. Выход')
+                self.logger.debug(f'on_trans_reply: Заявка {order.ref}. Ошибка. Выход')
                 return  # то заявку не отменяем, выходим, дальше не продолжаем
             try:  # TODO В BT очень редко при order.reject() возникает ошибка:
                 #    order.py, line 480, in reject
@@ -422,7 +367,7 @@ class QKBroker(with_metaclass(MetaQKBroker, BrokerBase)):
                 #    linebuffer.py, line 163, in __getitem__
                 #    return self.array[self.idx + ago]
                 #    IndexError: array index out of range
-                self.logger.debug(f'on_trans_reply: Перевод заявки с номером {order_num} в статус отклонена (Order.Rejected)')
+                self.logger.debug(f'on_trans_reply: Заявка {order.ref} переведена в статус отклонена (Order.Rejected)')
                 order.reject(self)  # Отклоняем заявку (Order.Rejected)
             except (KeyError, IndexError):  # При ошибке
                 order.status = Order.Rejected  # все равно ставим статус заявки Order.Rejected
@@ -433,76 +378,74 @@ class QKBroker(with_metaclass(MetaQKBroker, BrokerBase)):
                 #    linebuffer.py, line 163, in __getitem__
                 #    return self.array[self.idx + ago]
                 #    IndexError: array index out of range
-                self.logger.debug(f'on_trans_reply: Перевод заявки с номером {order_num} в статус не прошла проверку лимитов (Order.Margin)')
+                self.logger.debug(f'on_trans_reply: Заявка {order.ref} переведена в статус не прошла проверку лимитов (Order.Margin)')
                 order.margin()  # Для заявки не хватает средств (Order.Margin)
             except (KeyError, IndexError):  # При ошибке
                 order.status = Order.Margin  # все равно ставим статус заявки Order.Margin
         self.notifs.append(order.clone())  # Уведомляем брокера о заявке
         if order.status != Order.Accepted:  # Если новая заявка не зарегистрирована
-            self.logger.debug(f'on_trans_reply: Заявка с номером {order_num}. Проверка связанных и родительских/дочерних заявок')
+            self.logger.debug(f'on_trans_reply: Заявка {order.ref}. Проверка связанных и родительских/дочерних заявок')
             self.oco_pc_check(order)  # то проверяем связанные и родительскую/дочерние заявки (Canceled, Rejected, Margin)
-        self.logger.debug(f'on_trans_reply: Заявка с номером {order_num}. Выход')
+        self.logger.debug(f'on_trans_reply: Заявка {order.ref}. Выход')
 
     def on_trade(self, data):
         """Обработчик события получения новой / изменения существующей сделки.
         Выполняется до события изменения существующей заявки. Нужен для определения цены исполнения заявок.
         """
-        self.logger.debug(f'on_trade: data={data}')
+        self.logger.debug(f'on_trade: data={data}')  # Для отладки
         qk_trade = data['data']  # Сделка в QUIK
+        trade_num = int(qk_trade['trade_num'])  # Номер сделки (дублируется 3 раза)
         order_num = int(qk_trade['order_num'])  # Номер заявки на бирже
         trans_id = int(qk_trade['trans_id'])  # Номер транзакции из заявки на бирже. Не используем GetOrderByNumber, т.к. он может вернуть 0
-        self.logger.debug(f'on_trade: Заявка с номером {order_num}. Номер транзакции {trans_id}')
         if trans_id == 0:  # Заявки, выставленные не из автоторговли / только что (с нулевыми номерами транзакции)
             self.logger.debug(f'on_trade: Заявка с номером {order_num} выставлена не из автоторговли / только что. Выход')
             return  # выходим, дальше не продолжаем
         if trans_id not in self.orders:  # Пришла заявка не из автоторговли
-            self.logger.debug(f'on_trade: Заявка с номером {order_num}. Номер транзакции {trans_id} был выставлен не из торговой системы. Выход')
+            self.logger.debug(f'on_trade: Заявка с номером {order_num}. Номер транзакции {trans_id}. Заявка была выставлена не из торговой системы. Выход')
             return  # выходим, дальше не продолжаем
         order: Order = self.orders[trans_id]  # Ищем заявку по номеру транзакции
         order.addinfo(order_num=order_num)  # Сохраняем номер заявки на бирже (может быть переход от стоп заявки к лимитной с изменением номера на бирже)
-        self.logger.debug(f'on_trade: Заявка с номером {order_num}. order={order}')
-        class_code = qk_trade['class_code']  # Код площадки
+        self.logger.debug(f'on_trade: Заявка {order.ref} с номером {order_num}. Номер транзакции {trans_id}. Номер сделки {trade_num} order={order}')
+        class_code = qk_trade['class_code']  # Код режима торгов
         sec_code = qk_trade['sec_code']  # Код тикера
-        dataname = self.store.class_sec_code_to_data_name(class_code, sec_code)  # Получаем название тикера по коду площадки и коду тикера
-        self.logger.debug(f'on_trade: Заявка с номером {order_num}. dataname={dataname}')
-        trade_num = int(qk_trade['trade_num'])  # Номер сделки (дублируется 3 раза)
+        dataname = self.store.provider.class_sec_codes_to_dataname(class_code, sec_code)  # Получаем название тикера по коду режима торгов и коду тикера
         if dataname not in self.trade_nums.keys():  # Если это первая сделка по тикеру
             self.trade_nums[dataname] = []  # то ставим пустой список сделок
         elif trade_num in self.trade_nums[dataname]:  # Если номер сделки есть в списке (фильтр для дублей)
-            self.logger.debug(f'on_trade: Заявка с номером {order_num}. Номер сделки {trade_num} есть в списке сделок (дубль). Выход')
+            self.logger.debug(f'on_trade: Заявка {order.ref}. Номер сделки {trade_num} есть в списке сделок (дубль). Выход')
             return  # то выходим, дальше не продолжаем
         self.trade_nums[dataname].append(trade_num)  # Запоминаем номер сделки по тикеру, чтобы в будущем ее не обрабатывать (фильтр для дублей)
         size = int(qk_trade['qty'])  # Абсолютное кол-во
-        if self.p.Lots:  # Если входящий остаток в лотах
-            size = self.store.lots_to_size(class_code, sec_code, size)  # то переводим кол-во из лотов в штуки
+        if self.p.lots:  # Если входящий остаток в лотах
+            size = self.store.provider.lots_to_size(class_code, sec_code, size)  # то переводим кол-во из лотов в штуки
         if qk_trade['flags'] & 0b100 == 0b100:  # Если сделка на продажу (бит 2)
             size *= -1  # то кол-во ставим отрицательным
-        price = self.store.quik_to_bt_price(class_code, sec_code, float(qk_trade['price']))  # Переводим цену исполнения за лот в цену исполнения за штуку
-        self.logger.debug(f'on_trade: Заявка с номером {order_num}. size={size}, price={price}')
+        price = self.store.provider.quik_price_to_price(class_code, sec_code, float(qk_trade['price']))  # Переводим цену QUIK в цену
+        self.logger.debug(f'on_trade: Заявка {order.ref}. size={size}, price={price}')
         try:  # TODO Очень редко возникает ошибка:
             #    linebuffer.py, line 163, in __getitem__
             #    return self.array[self.idx + ago]
             #    IndexError: array index out of range
             dt = order.data.datetime[0]  # Дата и время исполнения заявки. Последняя известная
-            self.logger.debug(f'on_trade: Заявка с номером {order_num}. Дата/время исполнения заявки по бару {dt}')
+            self.logger.debug(f'on_trade: Заявка {order.ref}. Дата/время исполнения заявки по бару {dt}')
         except (KeyError, IndexError):  # При ошибке
-            dt = datetime.now(QKStore.MarketTimeZone)  # Берем текущее время на бирже из локального
-            self.logger.debug(f'on_trade: Заявка с номером {order_num}. Дата/время исполнения заявки по текущему {dt}')
-        pos = self.getposition(order.data)  # Получаем позицию по тикеру или нулевую позицию если тикера в списке позиций нет
-        psize, pprice, opened, closed = pos.update(size, price)  # Обновляем размер/цену позиции на размер/цену сделки
+            dt = datetime.now(self.store.provider.tz_msk)  # Берем текущее время на бирже из локального
+            self.logger.debug(f'on_trade: Заявка {order.ref}. Дата/время исполнения заявки по текущему {dt}')
+        position = self.getposition(order.data)  # Получаем позицию по тикеру или нулевую позицию если тикера в списке позиций нет
+        psize, pprice, opened, closed = position.update(size, price)  # Обновляем размер/цену позиции на размер/цену сделки
         order.execute(dt, size, price, closed, 0, 0, opened, 0, 0, 0, 0, psize, pprice)  # Исполняем заявку в BackTrader
         if order.executed.remsize:  # Если заявка исполнена частично (осталось что-то к исполнению)
-            self.logger.debug(f'on_trade: Заявка с номером {order_num} исполнилась частично. Остаток к исполнения {order.executed.remsize}')
+            self.logger.debug(f'on_trade: Заявка {order.ref} исполнилась частично. Остаток к исполнения {order.executed.remsize}')
             if order.status != order.Partial:  # Если заявка переходит в статус частичного исполнения (может исполняться несколькими частями)
-                self.logger.debug(f'on_trade: Перевод заявки с номером {order_num} в статус частично исполнена (Order.Partial)')
+                self.logger.debug(f'on_trade: Заявка {order.ref} переведена в статус частично исполнена (Order.Partial)')
                 order.partial()  # Переводим заявку в статус Order.Partial
                 self.notifs.append(order.clone())  # Уведомляем брокера о частичном исполнении заявки
         else:  # Если заявка исполнена полностью (ничего нет к исполнению)
-            self.logger.debug(f'on_trade: Перевод заявки с номером {order_num} в статус полностью исполнена (Order.Completed)')
+            self.logger.debug(f'on_trade: Заявка {order.ref} переведена в статус полностью исполнена (Order.Completed)')
             order.completed()  # Переводим заявку в статус Order.Completed
             self.notifs.append(order.clone())  # Уведомляем брокера о полном исполнении заявки
             # Снимаем oco-заявку только после полного исполнения заявки
             # Если нужно снять oco-заявку на частичном исполнении, то прописываем это правило в ТС
-            self.logger.debug(f'on_trade: Заявка с номером {order_num}. Проверка связанных и родительских/дочерних заявок')
+            self.logger.debug(f'on_trade: Заявка {order.ref}. Проверка связанных и родительских/дочерних заявок')
             self.oco_pc_check(order)  # Проверяем связанные и родительскую/дочерние заявки (Completed)
-        self.logger.debug(f'on_trade: Заявка с номером {order_num}. Выход')
+        self.logger.debug(f'on_trade: Заявка {order.ref}. Выход')

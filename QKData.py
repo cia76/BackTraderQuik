@@ -1,4 +1,10 @@
+import logging  # Будем вести лог
 from datetime import datetime, timedelta, time
+from time import sleep
+from uuid import uuid4  # Номера расписаний должны быть уникальными во времени и пространстве
+from threading import Thread, Event  # Поток и событие остановки потока получения новых бар по расписанию биржи
+import os.path
+import csv
 
 from backtrader.feed import AbstractDataBase
 from backtrader.utils.py3 import with_metaclass
@@ -16,29 +22,34 @@ class MetaQKData(AbstractDataBase.__class__):
 class QKData(with_metaclass(MetaQKData, AbstractDataBase)):
     """Данные QUIK"""
     params = (
-        ('FourPriceDoji', False),  # False - не пропускать дожи 4-х цен, True - пропускать
-        ('LiveBars', False),  # False - только история, True - история и новые бары
+        ('four_price_doji', False),  # False - не пропускать дожи 4-х цен, True - пропускать
+        ('schedule', None),  # Расписание работы биржи. Если не задано, то берем из подписки
+        ('live_bars', False),  # False - только история, True - история и новые бары
     )
+    datapath = os.path.join(os.path.dirname(os.path.realpath(__file__)), '..', 'Data', 'QUIK', '')  # Путь сохранения файла истории
+    delimiter = '\t'  # Разделитель значений в файле истории. По умолчанию табуляция
+    dt_format = '%d.%m.%Y %H:%M'  # Формат представления даты и времени в файле истории. По умолчанию русский формат
+    sleep_time_sec = 1  # Время ожидания в секундах, если не пришел новый бар. Для снижения нагрузки/энергопотребления процессора
+    delta = 3  # Корректировка в секундах при проверке времени окончания бара
 
     def islive(self):
         """Если подаем новые бары, то Cerebro не будет запускать preload и runonce, т.к. новые бары должны идти один за другим"""
-        return self.p.LiveBars
+        return self.p.live_bars
 
     def __init__(self, **kwargs):
-        self.interval = self.p.compression  # Для минутных временнЫх интервалов ставим кол-во минут
-        if self.p.timeframe == TimeFrame.Days:  # Дневной временной интервал
-            self.interval = 1440  # В минутах
-        elif self.p.timeframe == TimeFrame.Weeks:  # Недельный временной интервал
-            self.interval = 10080  # В минутах
-        elif self.p.timeframe == TimeFrame.Months:  # Месячный временной интервал
-            self.interval = 23200  # В минутах
-
-        self.store = QKStore(**kwargs)  # Передаем параметры в хранилище QUIK. Может работать самостоятельно, не через хранилище
-        self.classCode, self.secCode = self.store.data_name_to_class_sec_code(self.p.dataname)  # По тикеру получаем код площадки и код тикера
-
-        self.jsonBars = []  # Исторические бары после применения фильтров
-        self.newCandleSubscribed = False  # Наличие подписки на получение новых баров
-        self.liveMode = False  # Режим получения баров. False = История, True = Новые бары
+        self.store = QKStore(**kwargs)  # Хранилище QUIK
+        self.class_code, self.sec_code = self.store.provider.dataname_to_class_sec_codes(self.p.dataname)  # По тикеру получаем код режима торгов и тикер
+        self.quik_timeframe = self.bt_timeframe_to_quik_timeframe(self.p.timeframe, self.p.compression)  # Конвертируем временной интервал из BackTrader в QUIK
+        self.tf = self.bt_timeframe_to_tf(self.p.timeframe, self.p.compression)  # Конвертируем временной интервал из BackTrader для имени файла истории и расписания
+        self.file = f'{self.class_code}.{self.sec_code}_{self.tf}'  # Имя файла истории
+        self.logger = logging.getLogger(f'QKData.{self.file}')  # Будем вести лог
+        self.file_name = f'{self.datapath}{self.file}.txt'  # Полное имя файла истории
+        self.history_bars = []  # Исторические бары из файла и истории после проверки на соответствие условиям выборки
+        self.guid = None  # Идентификатор подписки/расписания на историю цен
+        self.exit_event = Event()  # Определяем событие выхода из потока
+        self.dt_last_open = datetime.min  # Дата и время открытия последнего полученного бара
+        self.last_bar_received = False  # Получен последний бар
+        self.live_mode = False  # Режим получения баров. False = История, True = Новые бары
 
     def setenvironment(self, env):
         """Добавление хранилища QUIK в cerebro"""
@@ -48,117 +59,244 @@ class QKData(with_metaclass(MetaQKData, AbstractDataBase)):
     def start(self):
         super(QKData, self).start()
         self.put_notification(self.DELAYED)  # Отправляем уведомление об отправке исторических (не новых) баров
-        json_bars = self.store.provider.get_candles_from_data_source(self.classCode, self.secCode, self.interval, 0)['data']  # Получаем все бары из QUIK
-        for bar in json_bars:  # Пробегаемся по всем полученным барам из QUIK
-            if self.is_bar_valid(bar, False):  # Если исторический бар соответствует всем условиям выборки
-                self.jsonBars.append(bar)  # то добавляем бар
-        if len(self.jsonBars) > 0:  # Если был получен хотя бы 1 бар
-            self.put_notification(self.CONNECTED)  # то отправляем уведомление о подключении и начале получения исторических баров
+        self.get_bars_from_file()  # Получаем бары из файла
+        self.get_bars_from_history()  # Получаем бары из истории
+        if len(self.history_bars) > 0:  # Если был получен хотя бы 1 бар
+            self.put_notification(self.CONNECTED)  # то отправляем уведомление о подключении и начале получения исторических бар
+        if self.p.live_bars:  # Если получаем историю и новые бары
+            if self.p.schedule:  # Если получаем новые бары по расписанию
+                self.guid = str(uuid4())  # guid расписания
+                Thread(target=self.stream_bars).start()  # Создаем и запускаем получение новых бар по расписанию в потоке
+            else:  # Если получаем новые бары по подписке
+                self.guid = (self.class_code, self.sec_code, self.quik_timeframe)  # guid подписки
+                self.logger.debug('Запуск подписки на новые бары')
+                if not self.store.provider.is_subscribed(self.class_code, self.sec_code, self.quik_timeframe)['data']:  # Если не было подписки на тикер/интервал
+                    self.store.provider.subscribe_to_candles(self.class_code, self.sec_code, self.quik_timeframe)  # Подписываемся на новые бары
 
     def _load(self):
-        """Загружаем бар из истории или новый бар в BackTrader"""
-        if not self.newCandleSubscribed:  # Если получаем исторические данные
-            if len(self.jsonBars) > 0:  # Если есть исторические данные
-                bar = self.jsonBars[0]  # Берем первый бар из выборки, с ним будем работать
-                self.jsonBars.remove(bar)  # Убираем его из хранилища новых баров
-            else:  # Если исторических данных нет
-                self.put_notification(self.DISCONNECTED)  # Отправляем уведомление об окончании получения исторических баров
-                if not self.p.LiveBars:  # Если новые бары не принимаем
-                    return False  # Больше сюда заходить не будем
-                if not self.store.provider.is_subscribed(self.classCode, self.secCode, self.interval)['data']:  # Если не было подписки на тикер/интервал
-                    self.store.provider.subscribe_to_candles(self.classCode, self.secCode, self.interval)  # Подписываемся на новые бары
-                    self.store.subscribed_symbols.append({'class': self.classCode, 'sec': self.secCode, 'interval': self.interval})  # Добавляем в список подписанных тикеров/интервалов
-                self.newCandleSubscribed = True  # Дальше будем получать новые бары по подписке
-                return None  # Будем заходить еще
-        else:  # Если получаем новые бары по подписке
-            if len(self.store.new_bars) == 0:  # Если в хранилище никаких новых баров нет
-                return None  # то нового бара нет, будем заходить еще
-            new_bars = [newBar for newBar in self.store.new_bars  # Смотрим в хранилище новых баров
-                        if newBar['class'] == self.classCode and  # бары с нужным кодом площадки,
-                        newBar['sec'] == self.secCode and  # тикером,
-                        int(newBar['interval']) == self.interval]  # и интервалом
+        """Загрузка бара из истории или нового бара"""
+        if len(self.history_bars) > 0:  # Если есть исторические данные
+            bar = self.history_bars.pop(0)  # Берем и удаляем первый бар из хранилища исторических данных. С ним будем работать
+        elif not self.p.live_bars:  # Если получаем только историю (self.history_bars) и исторических данных нет / все исторические данные получены
+            self.put_notification(self.DISCONNECTED)  # Отправляем уведомление об окончании получения исторических бар
+            self.logger.debug('Бары из файла/истории отправлены в ТС. Новые бары получать не нужно. Выход')
+            return False  # Больше сюда заходить не будем
+        else:  # Если получаем историю и новые бары (self.store.new_bars)
+            new_bars = [new_bar for new_bar in self.store.new_bars if new_bar['guid'] == self.guid]  # Получаем новые бары из хранилища по guid
             if len(new_bars) == 0:  # Если новый бар еще не появился
+                # self.logger.debug(f'Новых бар нет. Ожидание {self.sleep_time_sec} с')  # Для отладки. Грузит процессор
+                sleep(self.sleep_time_sec)  # Ждем для снижения нагрузки/энергопотребления процессора
                 return None  # то нового бара нет, будем заходить еще
-            bar = new_bars[0]  # Получаем текущий (первый) бар из выборки, с ним будем работать
-            self.store.new_bars.remove(bar)  # Убираем его из хранилища новых баров
-            if not self.is_bar_valid(bar, True):  # Если бар по подписке не соответствует всем условиям выборки
-                return None  # то нового бара нет, будем заходить еще
-            dt_open = self.get_bar_open_date_time(bar)  # Дата и время открытия бара
-            dt_next_bar_close = self.get_bar_close_date_time(dt_open, 2)  # Биржевое время закрытия следующего бара
-            time_market_now = self.get_quik_date_time_now()  # Текущее биржевое время из QUIK
-            # Переходим в режим получения новых баров (LIVE), если не находимся в этом режиме и
-            # следующий бар закроется в будущем (т.к. пришедший бар закрылся в прошлом), или пришел последний бар предыдущей сессии
-            if not self.liveMode and (dt_next_bar_close > time_market_now or dt_open.day != time_market_now.day):
-                self.put_notification(self.LIVE)  # Отправляем уведомление о получении новых баров
-                self.liveMode = True  # Переходим в режим получения новых баров (LIVE)
-            # Бывает ситуация, когда QUIK несколько минут не передает новые бары. Затем передает все пропущенные
-            # Чтобы не совершать сделки на истории, меняем режим торгов на историю до прихода нового бара
-            elif self.liveMode and dt_next_bar_close <= time_market_now:  # Если в режиме получения новых баров, и следующий бар закроется до текущего времени на бирже
-                self.put_notification(self.DELAYED)  # Отправляем уведомление об отправке исторических (не новых) баров
-                self.liveMode = False  # Переходим в режим получения истории
+            self.last_bar_received = len(new_bars) == 1  # Если в хранилище остался 1 бар, то мы будем получать последний возможный бар
+            if self.last_bar_received:  # Получаем последний возможный бар
+                self.logger.debug('Получение последнего возможного на данный момент бара')
+            bar = self.store.new_bars.pop(0)['data']  # Берем и удаляем первый бар из хранилища новых бар. С ним будем работать
+            if not self.is_bar_valid(bar):  # Если бар не соответствует всем условиям выборки
+                return None  # то пропускаем бар, будем заходить еще
+            self.logger.debug(f'Сохранение нового бара с {bar["datetime"].strftime(self.dt_format)} в файл')
+            self.save_bar_to_file(bar)  # Сохраняем бар в конец файла
+            if self.last_bar_received and not self.live_mode:  # Если получили последний бар и еще не находимся в режиме получения новых бар (LIVE)
+                self.put_notification(self.LIVE)  # Отправляем уведомление о получении новых бар
+                self.live_mode = True  # Переходим в режим получения новых бар (LIVE)
+            elif self.live_mode and not self.last_bar_received:  # Если находимся в режиме получения новых бар (LIVE)
+                self.put_notification(self.DELAYED)  # Отправляем уведомление об отправке исторических (не новых) бар
+                self.live_mode = False  # Переходим в режим получения истории
         # Все проверки пройдены. Записываем полученный исторический/новый бар
-        self.lines.datetime[0] = date2num(self.get_bar_open_date_time(bar))  # Переводим в формат хранения даты/времени в BackTrader
-        self.lines.open[0] = self.store.quik_to_bt_price(self.classCode, self.secCode, bar['open'])  # Open
-        self.lines.high[0] = self.store.quik_to_bt_price(self.classCode, self.secCode, bar['high'])  # High
-        self.lines.low[0] = self.store.quik_to_bt_price(self.classCode, self.secCode, bar['low'])  # Low
-        self.lines.close[0] = self.store.quik_to_bt_price(self.classCode, self.secCode, bar['close'])  # Close
-        self.lines.volume[0] = bar['volume']  # Volume
+        self.lines.datetime[0] = date2num(bar['datetime'])  # Переводим в формат хранения даты/времени в BackTrader
+        self.lines.open[0] = bar['open']
+        self.lines.high[0] = bar['high']
+        self.lines.low[0] = bar['low']
+        self.lines.close[0] = bar['close']
+        self.lines.volume[0] = int(bar['volume'])
         self.lines.openinterest[0] = 0  # Открытый интерес в QUIK не учитывается
         return True  # Будем заходить сюда еще
 
     def stop(self):
         super(QKData, self).stop()
-        if self.newCandleSubscribed:  # Если принимали новые бары и подписались на них
-            self.store.provider.unsubscribe_from_candles(self.classCode, self.secCode, self.interval)  # Отменяем подписку на новые бары
-            self.put_notification(self.DISCONNECTED)  # Отправляем уведомление об окончании получения новых баров
+        if self.p.live_bars:  # Если была подписка/расписание
+            if self.p.schedule:  # Если получаем новые бары по расписанию
+                self.exit_event.set()  # то отменяем расписание
+            else:  # Если получаем новые бары по подписке
+                self.logger.info(f'Отмена подписки {self.guid} на новые бары')
+                self.store.provider.unsubscribe_from_candles(self.class_code, self.sec_code, self.quik_timeframe)  # то отменяем подписку
+            self.put_notification(self.DISCONNECTED)  # Отправляем уведомление об окончании получения новых бар
         self.store.DataCls = None  # Удаляем класс данных в хранилище
 
-    # Функции
+    # Получение/сохранение бар
 
-    def is_bar_valid(self, bar, live):
+    def get_bars_from_file(self) -> None:
+        """Получение бар из файла"""
+        if not os.path.isfile(self.file_name):  # Если файл не существует
+            return  # то выходим, дальше не продолжаем
+        self.logger.debug(f'Получение бар из файла {self.file_name}')
+        with open(self.file_name) as file:  # Открываем файл на последовательное чтение
+            reader = csv.reader(file, delimiter=self.delimiter)  # Данные в строке разделены табуляцией
+            next(reader, None)  # Пропускаем первую строку с заголовками
+            for csv_row in reader:  # Последовательно получаем все строки файла
+                bar = dict(datetime=datetime.strptime(csv_row[0], self.dt_format),
+                           open=float(csv_row[1]), high=float(csv_row[2]), low=float(csv_row[3]), close=float(csv_row[4]),
+                           volume=int(csv_row[5]))  # Бар из файла
+                if self.is_bar_valid(bar):  # Если исторический бар соответствует всем условиям выборки
+                    self.history_bars.append(bar)  # то добавляем бар
+        if len(self.history_bars) > 0:  # Если были получены бары из файла
+            self.logger.debug(f'Получено бар из файла: {len(self.history_bars)} с {self.history_bars[0]["datetime"].strftime(self.dt_format)} по {self.history_bars[-1]["datetime"].strftime(self.dt_format)}')
+        else:  # Бары из файла не получены
+            self.logger.debug('Из файла новых бар не получено')
+
+    def get_bars_from_history(self) -> None:
+        """Получение бар из истории"""
+        file_history_bars_len = len(self.history_bars)  # Кол-во полученных бар из файла для лога
+        self.logger.debug(f'Получение всех бар из истории')
+        history_bars = self.store.provider.get_candles_from_data_source(self.class_code, self.sec_code, self.quik_timeframe)['data']  # Получаем все бары из QUIK
+        for history_bar in history_bars:  # Пробегаемся по всем полученным барам
+            bar = dict(datetime=self.store.get_bar_open_date_time(history_bar),
+                       open=self.store.provider.quik_price_to_price(self.class_code, self.sec_code, history_bar['open']),
+                       high=self.store.provider.quik_price_to_price(self.class_code, self.sec_code, history_bar['high']),
+                       low=self.store.provider.quik_price_to_price(self.class_code, self.sec_code, history_bar['low']),
+                       close=self.store.provider.quik_price_to_price(self.class_code, self.sec_code, history_bar['close']),
+                       volume=self.store.provider.lots_to_size(self.class_code, self.sec_code, history_bar['volume']))  # Бар из истории
+            if self.is_bar_valid(bar):  # Если исторический бар соответствует всем условиям выборки
+                self.history_bars.append(bar)  # то добавляем бар
+                self.save_bar_to_file(bar)  # и сохраняем бар в конец файла
+        if len(self.history_bars) - file_history_bars_len > 0:  # Если получены бары из истории
+            self.logger.debug(f'Получено бар из истории: {len(self.history_bars) - file_history_bars_len} с {self.history_bars[file_history_bars_len]["datetime"].strftime(self.dt_format)} по {self.history_bars[-1]["datetime"].strftime(self.dt_format)}')
+        else:  # Бары из истории не получены
+            self.logger.debug('Из истории новых бар не получено')
+
+    def is_bar_valid(self, bar) -> bool:
         """Проверка бара на соответствие условиям выборки"""
-        dt_open = self.get_bar_open_date_time(bar)  # Дата и время открытия бара
+        dt_open = bar['datetime']  # Дата и время открытия бара МСК
+        if dt_open <= self.dt_last_open:  # Если пришел бар из прошлого (дата открытия меньше последней даты открытия)
+            # self.logger.debug(f'Дата/время открытия бара {dt_open} <= последней даты/времени открытия {self.dt_last_open}')
+            return False  # то бар не соответствует условиям выборки
+        if self.p.fromdate and dt_open < self.p.fromdate or self.p.todate and dt_open > self.p.todate:  # Если задан диапазон, а бар за его границами
+            # self.logger.debug(f'Дата/время открытия бара {dt_open} за границами диапазона {self.p.fromdate} - {self.p.todate}')
+            self.dt_last_open = dt_open  # Запоминаем дату/время открытия пришедшего бара для будущих сравнений
+            return False  # то бар не соответствует условиям выборки
         if self.p.sessionstart != time.min and dt_open.time() < self.p.sessionstart:  # Если задано время начала сессии и открытие бара до этого времени
+            self.logger.debug(f'Дата/время открытия бара {dt_open} до начала торговой сессии {self.p.sessionstart}')
+            self.dt_last_open = dt_open  # Запоминаем дату/время открытия пришедшего бара для будущих сравнений
             return False  # то бар не соответствует условиям выборки
         dt_close = self.get_bar_close_date_time(dt_open)  # Дата и время закрытия бара
         if self.p.sessionend != time(23, 59, 59, 999990) and dt_close.time() > self.p.sessionend:  # Если задано время окончания сессии и закрытие бара после этого времени
+            self.logger.debug(f'Дата/время открытия бара {dt_open} после окончания торговой сессии {self.p.sessionend}')
+            self.dt_last_open = dt_open  # Запоминаем дату/время открытия пришедшего бара для будущих сравнений
             return False  # то бар не соответствует условиям выборки
-        high = self.store.quik_to_bt_price(self.classCode, self.secCode, bar['high'])  # High
-        low = self.store.quik_to_bt_price(self.classCode, self.secCode, bar['low'])  # Low
-        if not self.p.FourPriceDoji and high == low:  # Если не пропускаем дожи 4-х цен, но такой бар пришел
+        if not self.p.four_price_doji and bar['high'] == bar['low']:  # Если не пропускаем дожи 4-х цен, но такой бар пришел
+            self.logger.debug(f'Бар {dt_open} - дожи 4-х цен')
+            self.dt_last_open = dt_open  # Запоминаем дату/время открытия пришедшего бара для будущих сравнений
             return False  # то бар не соответствует условиям выборки
-        time_market_now = self.get_quik_date_time_now()  # Текущее биржевое время
-        if not live:  # Если получаем исторические данные
-            if dt_close > time_market_now and time_market_now.time() < self.p.sessionend:  # Если время закрытия бара еще не наступило на бирже, и сессия еще не закончилась
-                return False  # то бар не соответствует условиям выборки
-        else:  # Если получаем новые бары по подписке
-            if date2num(dt_open) <= self.lines.datetime[-1]:  # Если получили предыдущий или более старый бар
-                return False  # то выходим, дальше не продолжаем
-            time_market_now += timedelta(seconds=3)  # Текущее биржевое время из QUIK. Корректируем его на несколько секунд, т.к. минутный бар может прийти в 59 секунд прошлой минуты
-            if dt_close > time_market_now:  # Если получили несформированный бар. Например, дневной бар в середине сессии
-                return False  # то бар не соответствует условиям выборки
+        dt_market_now = self.get_quik_date_time_now()  # Текущая дата и время из QUIK
+        dt_market_now_corrected = dt_market_now + timedelta(seconds=self.delta)  # Текущая дата и время из QUIK с корректировкой
+        if dt_close > dt_market_now_corrected and dt_market_now_corrected.time() < self.p.sessionend:  # Если время закрытия бара еще не наступило на бирже, и сессия еще не закончилась
+            self.logger.debug(f'Дата/время {dt_close:{self.dt_format}} закрытия бара на {dt_open:{self.dt_format}} еще не наступило. Текущее время {dt_market_now:%d.%m.%Y %H:%M:%S}')
+            return False  # то бар не соответствует условиям выборки
+        self.dt_last_open = dt_open  # Запоминаем дату/время открытия пришедшего бара для будущих сравнений
         return True  # В остальных случаях бар соответствуем условиям выборки
 
+    def stream_bars(self) -> None:
+        """Поток получения новых бар по расписанию биржи"""
+        self.logger.debug('Запуск получения новых бар по расписанию')
+        while True:
+            market_datetime_now = self.p.schedule.utc_to_msk_datetime(datetime.utcnow())  # Текущее время на бирже
+            trade_bar_request_datetime = self.p.schedule.trade_bar_request_datetime(market_datetime_now, self.tf)  # Дата и время запроса бара на бирже
+            sleep_time_secs = (trade_bar_request_datetime - market_datetime_now).total_seconds()  # Время ожидания в секундах
+            self.logger.debug(f'Получение последнего бара по расписанию в {trade_bar_request_datetime.strftime(self.dt_format)}. Ожидание {sleep_time_secs} с')
+            exit_event_set = self.exit_event.wait(sleep_time_secs)  # Ждем нового бара или события выхода из потока
+            if exit_event_set:  # Если произошло событие выхода из потока
+                self.logger.warning('Отмена получения новых бар по расписанию')
+                return  # Выходим из потока, дальше не продолжаем
+            bars = self.store.provider.get_candles_from_data_source(self.class_code, self.sec_code, self.quik_timeframe, count=1)['data']  # Получаем последний бар из QUIK
+            stream_bar = bars[0]  # Последний бар
+            bar = dict(datetime=self.store.get_bar_open_date_time(stream_bar),
+                       open=self.store.provider.quik_price_to_price(self.class_code, self.sec_code, stream_bar['open']),
+                       high=self.store.provider.quik_price_to_price(self.class_code, self.sec_code, stream_bar['high']),
+                       low=self.store.provider.quik_price_to_price(self.class_code, self.sec_code, stream_bar['low']),
+                       close=self.store.provider.quik_price_to_price(self.class_code, self.sec_code, stream_bar['close']),
+                       volume=self.store.provider.lots_to_size(self.class_code, self.sec_code, stream_bar['volume']))  # Бар по расписанию
+            self.logger.debug('Получен бар по расписанию')
+            self.store.new_bars.append(dict(guid=self.guid, data=bar))  # Добавляем в хранилище новых бар
+
+    def save_bar_to_file(self, bar) -> None:
+        """Сохранение бара в конец файла"""
+        if not os.path.isfile(self.file_name):  # Существует ли файл
+            self.logger.warning(f'Файл {self.file_name} не найден и будет создан')
+            with open(self.file_name, 'w', newline='') as file:  # Создаем файл
+                writer = csv.writer(file, delimiter=self.delimiter)  # Данные в строке разделены табуляцией
+                writer.writerow(bar.keys())  # Записываем заголовок в файл
+        with open(self.file_name, 'a', newline='') as file:  # Открываем файл на добавление в конец. Ставим newline, чтобы в Windows не создавались пустые строки в файле
+            writer = csv.writer(file, delimiter=self.delimiter)  # Данные в строке разделены табуляцией
+            csv_row = bar.copy()  # Копируем бар для того, чтобы изменить формат даты
+            csv_row['datetime'] = csv_row['datetime'].strftime(self.dt_format)  # Приводим дату к формату файла
+            writer.writerow(csv_row.values())  # Записываем бар в конец файла
+            self.logger.debug(f'В файл {self.file_name} записан бар на {csv_row["datetime"]}')
+
+    # Функции
+
     @staticmethod
-    def get_bar_open_date_time(bar):
-        """Дата и время открытия бара"""
-        dt_json = bar['datetime']  # Получаем составное значение даты и времени открытия бара
-        return datetime(dt_json['year'], dt_json['month'], dt_json['day'], dt_json['hour'], dt_json['min'])  # Время открытия бара
+    def bt_timeframe_to_quik_timeframe(timeframe, compression=1) -> int:
+        """Перевод временнОго интервала из BackTrader в QUIK
+
+        :param TimeFrame timeframe: Временной интервал
+        :param int compression: Размер временнОго интервала
+        :return: Временной интервал QUIK
+        """
+        if timeframe == TimeFrame.Minutes:  # Минутный временной интервал
+            return compression  # Кол-во минут
+        elif timeframe == TimeFrame.Days:  # Дневной временной интервал (по умолчанию)
+            return 1440  # В минутах
+        elif timeframe == TimeFrame.Weeks:  # Недельный временной интервал
+            return 10080  # В минутах
+        elif timeframe == TimeFrame.Months:  # Месячный временной интервал
+            return 23200  # В минутах
+        raise NotImplementedError  # С остальными временнЫми интервалами не работаем
+
+    @staticmethod
+    def bt_timeframe_to_tf(timeframe, compression=1) -> str:
+        """Перевод временнОго интервала из BackTrader для имени файла истории и расписания https://ru.wikipedia.org/wiki/Таймфрейм
+
+        :param TimeFrame timeframe: Временной интервал
+        :param int compression: Размер временнОго интервала
+        :return: Временной интервал для имени файла истории и расписания
+        """
+        if timeframe == TimeFrame.Minutes:  # Минутный временной интервал
+            return f'M{compression}'
+        # Часовой график f'H{compression}' заменяем минутным. Пример: H1 = M60
+        elif timeframe == TimeFrame.Days:  # Дневной временной интервал
+            return 'D1'
+        elif timeframe == TimeFrame.Weeks:  # Недельный временной интервал
+            return 'W1'
+        elif timeframe == TimeFrame.Months:  # Месячный временной интервал
+            return 'MN1'
+        raise NotImplementedError  # С остальными временнЫми интервалами не работаем
 
     def get_bar_close_date_time(self, dt_open, period=1):
         """Дата и время закрытия бара"""
-        return dt_open + timedelta(minutes=self.interval * period)  # Время закрытия бара
+        if self.p.timeframe == TimeFrame.Days:  # Дневной временной интервал (по умолчанию)
+            return dt_open + timedelta(days=period)  # Время закрытия бара
+        elif self.p.timeframe == TimeFrame.Weeks:  # Недельный временной интервал
+            return dt_open + timedelta(weeks=period)  # Время закрытия бара
+        elif self.p.timeframe == TimeFrame.Months:  # Месячный временной интервал
+            year = dt_open.year + (dt_open.month + period - 1) // 12  # Год
+            month = (dt_open.month + period - 1) % 12 + 1  # Месяц
+            return datetime(year, month, 1)  # Время закрытия бара
+        elif self.p.timeframe == TimeFrame.Years:  # Годовой временной интервал
+            return dt_open.replace(year=dt_open.year + period)  # Время закрытия бара
+        elif self.p.timeframe == TimeFrame.Minutes:  # Минутный временной интервал
+            return dt_open + timedelta(minutes=self.p.compression * period)  # Время закрытия бара
+        elif self.p.timeframe == TimeFrame.Seconds:  # Секундный временной интервал
+            return dt_open + timedelta(seconds=self.p.compression * period)  # Время закрытия бара
 
     def get_quik_date_time_now(self):
         """Текущая дата и время
         - Если получили последний бар истории, то запрашием текущие дату и время из QUIK
         - Если находимся в режиме получения истории, то переводим текущие дату и время с компьютера в МСК
         """
-        if not self.liveMode:  # Если не находимся в режиме получения новых баров
-            return datetime.now(self.store.MarketTimeZone).replace(tzinfo=None)  # То время МСК получаем из локального времени
-        d = self.store.provider.get_info_param('TRADEDATE')['data']  # Дата на сервере в виде строки dd.mm.yyyy. Может прийти неверная дата
-        t = self.store.provider.get_info_param('SERVERTIME')['data']  # Время на сервере в виде строки hh:mi:ss
+        if not self.live_mode:  # Если не находимся в режиме получения новых баров
+            return datetime.now(self.store.provider.tz_msk).replace(tzinfo=None)  # То время МСК получаем из локального времени
         try:  # Проверяем, можно ли привести полученные строки в дату и время
+            d = self.store.provider.get_info_param('TRADEDATE')['data']  # Дата на сервере в виде строки dd.mm.yyyy. Может прийти неверная дата
+            t = self.store.provider.get_info_param('SERVERTIME')['data']  # Время на сервере в виде строки hh:mi:ss
             return datetime.strptime(f'{d} {t}', '%d.%m.%Y %H:%M:%S')  # Переводим строки в дату и время и возвращаем ее
         except ValueError:  # Если нельзя привести полученные строки в дату и время
-            return datetime.now(self.store.MarketTimeZone).replace(tzinfo=None)  # То время МСК получаем из локального времени
+            return datetime.now(self.store.provider.tz_msk).replace(tzinfo=None)  # То время МСК получаем из локального времени
