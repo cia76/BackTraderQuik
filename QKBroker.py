@@ -11,9 +11,9 @@ from BackTraderQuik import QKStore
 
 # noinspection PyArgumentList
 class MetaQKBroker(BrokerBase.__class__):
-    def __init__(self, name, bases, dct):
-        super(MetaQKBroker, self).__init__(name, bases, dct)  # Инициализируем класс брокера
-        QKStore.BrokerCls = self  # Регистрируем класс брокера в хранилище QUIK
+    def __init__(cls, name, bases, dct):
+        super(MetaQKBroker, cls).__init__(name, bases, dct)  # Инициализируем класс брокера
+        QKStore.BrokerCls = cls  # Регистрируем класс брокера в хранилище QUIK
 
 
 # noinspection PyProtectedMember,PyArgumentList

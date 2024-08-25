@@ -31,18 +31,18 @@ class QKStore(with_metaclass(MetaSingleton, object)):
 
     @classmethod
     def getdata(cls, *args, **kwargs):
-        """Returns DataCls with args, kwargs"""
+        """Возвращает новый экземпляр класса данных с заданными параметрами"""
         return cls.DataCls(*args, **kwargs)
 
     @classmethod
     def getbroker(cls, *args, **kwargs):
-        """Returns broker with *args, **kwargs from registered BrokerCls"""
+        """Возвращает новый экземпляр класса брокера с заданными параметрами"""
         return cls.BrokerCls(*args, **kwargs)
 
     def __init__(self, provider=QuikPy()):
         super(QKStore, self).__init__()
         self.notifs = deque()  # Уведомления хранилища
-        self.provider = provider  # Подключаемся ко всем торговым счетам
+        self.provider = provider  # Подключаемся к провайдеру QuikPy
         self.new_bars = []  # Новые бары по всем подпискам на тикеры из QUIK
 
     def start(self):
@@ -67,14 +67,15 @@ class QKStore(with_metaclass(MetaSingleton, object)):
         class_code = bar['class']  # Код режима торгов
         sec_code = bar['sec']  # Тикер
         interval = bar['interval']  # Временной интервал QUIK
-        datetime = self.get_bar_open_date_time(bar)
+        guid = (class_code, sec_code, interval)  # Идентификатор подписки
+        dt = self.get_bar_open_date_time(bar)
         _open = self.provider.quik_price_to_price(class_code, sec_code, bar['open'])
         high = self.provider.quik_price_to_price(class_code, sec_code, bar['high'])
         low = self.provider.quik_price_to_price(class_code, sec_code, bar['low'])
         close = self.provider.quik_price_to_price(class_code, sec_code, bar['close'])
         volume = self.provider.lots_to_size(class_code, sec_code, int(bar['volume']))
-        bar = dict(datetime=datetime, open=_open, high=high, low=low, close=close, volume=volume)  # Новый бар
-        self.new_bars.append(dict(guid=(class_code, sec_code, interval), data=bar))
+        bar = dict(datetime=dt, open=_open, high=high, low=low, close=close, volume=volume)  # Новый бар
+        self.new_bars.append(dict(guid=guid, data=bar))
 
     @staticmethod
     def get_bar_open_date_time(bar):
