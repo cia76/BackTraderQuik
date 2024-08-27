@@ -99,7 +99,7 @@ class QKBroker(with_metaclass(MetaQKBroker, BrokerBase)):
             account = next((account for account in self.store.provider.accounts if class_code in account['class_codes']), None)  # По коду режима находим счет
             if account_id is not None and account != self.store.provider.accounts[account_id]:  # Если смотрим стоимость по счету, и это не заданный счет
                 continue  # то переходим к следующей позиции, дальше не продолжаем
-            last_price = self.store.provider.quik_price_to_price(class_code, sec_code, float(self.store.provider.get_param_ex(class_code, sec_code, 'LAST')['data']['param_value']))  # Последняя цена сделки
+            last_price = self.store.provider.quik_price_to_price(class_code, sec_code, float(self.store.provider.get_param_ex(class_code, sec_code, 'LAST')['data']['param_value']))  # Последняя цена сделки в рублях за штуку
             value += position.size * last_price  # Добавляем стоимость позиции
         if datas is None and account_id is None and value:  # Если была получена стоимость всех позиций
             self.value = value  # то сохраняем стоимость всех позиций
@@ -160,7 +160,7 @@ class QKBroker(with_metaclass(MetaQKBroker, BrokerBase)):
                     size = int(active_futures_holding['totalnet'])  # Кол-во
                     if self.p.lots:  # Если входящий остаток в лотах
                         size = self.store.provider.lots_to_size(class_code, sec_code, size)  # то переводим кол-во из лотов в штуки
-                    price = self.store.provider.quik_price_to_price(class_code, sec_code, float(active_futures_holding['avrposnprice']))  # Переводим эффективную цену позиций (входа) в цену
+                    price = self.store.provider.quik_price_to_price(class_code, sec_code, float(active_futures_holding['avrposnprice']))  # Переводим эффективную цену позиций (входа) в цену в рублях за штуку
                     self.positions[dataname] = Position(size, price)  # Сохраняем в списке открытых позиций
             else:  # Для остальных фирм
                 depo_limits = self.store.provider.get_all_depo_limits()['data']  # Все лимиты по бумагам (позиции по инструментам)
@@ -175,7 +175,7 @@ class QKBroker(with_metaclass(MetaQKBroker, BrokerBase)):
                     size = int(firm_kind_depo_limit['currentbal'])  # Кол-во
                     if self.p.lots:  # Если входящий остаток в лотах
                         size = self.store.provider.lots_to_size(class_code, sec_code, size)  # то переводим кол-во из лотов в штуки
-                    price = self.store.provider.quik_price_to_price(class_code, sec_code, float(firm_kind_depo_limit['wa_position_price']))  # Переводим средневзвешенную цену приобретения позиции (входа) в цену
+                    price = self.store.provider.quik_price_to_price(class_code, sec_code, float(firm_kind_depo_limit['wa_position_price']))  # Переводим средневзвешенную цену приобретения позиции (входа) в цену в рублях за штуку
                     self.positions[dataname] = Position(size, price)  # Сохраняем в списке открытых позиций
 
     def create_order(self, owner, data, size, price=None, plimit=None, exectype=None, valid=None, oco=None, parent=None, transmit=True, is_buy=True, **kwargs):
@@ -420,7 +420,7 @@ class QKBroker(with_metaclass(MetaQKBroker, BrokerBase)):
             size = self.store.provider.lots_to_size(class_code, sec_code, size)  # то переводим кол-во из лотов в штуки
         if qk_trade['flags'] & 0b100 == 0b100:  # Если сделка на продажу (бит 2)
             size *= -1  # то кол-во ставим отрицательным
-        price = self.store.provider.quik_price_to_price(class_code, sec_code, float(qk_trade['price']))  # Переводим цену QUIK в цену
+        price = self.store.provider.quik_price_to_price(class_code, sec_code, float(qk_trade['price']))  # Переводим цену QUIK в цену в рублях за штуку
         self.logger.debug(f'on_trade: Заявка {order.ref}. size={size}, price={price}')
         try:  # TODO Очень редко возникает ошибка:
             #    linebuffer.py, line 163, in __getitem__

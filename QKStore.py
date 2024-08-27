@@ -68,13 +68,9 @@ class QKStore(with_metaclass(MetaSingleton, object)):
         sec_code = bar['sec']  # Тикер
         interval = bar['interval']  # Временной интервал QUIK
         guid = (class_code, sec_code, interval)  # Идентификатор подписки
-        dt = self.get_bar_open_date_time(bar)
-        _open = self.provider.quik_price_to_price(class_code, sec_code, bar['open'])
-        high = self.provider.quik_price_to_price(class_code, sec_code, bar['high'])
-        low = self.provider.quik_price_to_price(class_code, sec_code, bar['low'])
-        close = self.provider.quik_price_to_price(class_code, sec_code, bar['close'])
-        volume = self.provider.lots_to_size(class_code, sec_code, int(bar['volume']))
-        bar = dict(datetime=dt, open=_open, high=high, low=low, close=close, volume=volume)  # Новый бар
+        bar = dict(datetime=self.get_bar_open_date_time(bar),  # Собираем дату и время открытия бара
+                   open=bar['open'], high=bar['high'], low=bar['low'], close=bar['close'],  # Цены QUIK
+                   volume=self.provider.lots_to_size(class_code, sec_code, int(bar['volume'])))  # Объем в штуках
         self.new_bars.append(dict(guid=guid, data=bar))
 
     @staticmethod
