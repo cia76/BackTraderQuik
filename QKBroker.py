@@ -235,9 +235,6 @@ class QKBroker(with_metaclass(MetaQKBroker, BrokerBase)):
             if class_code == 'SPBFUT':  # Для рынка фьючерсов
                 last_price = float(self.store.provider.get_param_ex(class_code, sec_code, 'LAST')['data']['param_value'])  # Последняя цена сделки
                 price = last_price + slippage if order.isbuy() else last_price - slippage  # Из документации QUIK: При покупке/продаже фьючерсов по рынку нужно ставить цену хуже последней сделки
-                price = int(price) if price.is_integer() else price  # Целое значение мы должны отправлять без десятичных знаков. Поэтому, если возможно, приводим цену к целому числу
-        else:  # Для остальных заявок
-            price = self.store.provider.price_to_quik_price(class_code, sec_code, price)  # Переводим цену в цену QUIK
         transaction = {  # Все значения должны передаваться в виде строк
             'TRANS_ID': str(order.ref),  # Номер транзакции задается клиентом
             # Если для заявок брокер устанавливает отдельный код клиента, то задаем его в параметре client_code_for_orders, и используем здесь
@@ -251,18 +248,17 @@ class QKBroker(with_metaclass(MetaQKBroker, BrokerBase)):
         if order.exectype in [Order.Market, Order.Limit]:  # Для рыночной/лимитной заявки
             transaction['ACTION'] = 'NEW_ORDER'  # Новая рыночная или лимитная заявка
             transaction['TYPE'] = 'L' if order.exectype == Order.Limit else 'M'  # L = лимитная заявка (по умолчанию), M = рыночная заявка
-            transaction['PRICE'] = str(price)  # Цена исполнения
+            transaction['PRICE'] = str(self.store.provider.price_to_quik_price(class_code, sec_code, price))  # Рыночная/лимитная цена QUIK
         else:  # Для стоп/стоп лимитной заявки
             transaction['ACTION'] = 'NEW_STOP_ORDER'  # Новая стоп заявка
-            transaction['STOPPRICE'] = str(price)  # Стоп цена срабатывания
+            transaction['STOPPRICE'] = str(self.store.provider.price_to_quik_price(class_code, sec_code, price))  # Стоп цена QUIK
             if order.exectype == Order.Stop:  # Для стоп заявки
                 stop_market_price = 0.00  # Цена рыночной заявки должна быть нулевой (кроме рынка фьючерсов)
                 if class_code == 'SPBFUT':  # Для рынка фьючерсов
                     stop_market_price = price + slippage if order.isbuy() else price - slippage  # Из документации QUIK: При покупке/продаже фьючерсов по рынку нужно ставить цену хуже последней сделки
-                    stop_market_price = int(stop_market_price) if stop_market_price.is_integer() else stop_market_price  # Целое значение мы должны отправлять без десятичных знаков. Поэтому, если возможно, приводим цену к целому числу
-                transaction['PRICE'] = str(stop_market_price)  # Цена рыночной заявки
+                transaction['PRICE'] = str(self.store.provider.price_to_quik_price(class_code, sec_code, stop_market_price))  # Рыночная цена QUIK
             else:  # Для стоп лимитной заявки
-                transaction['PRICE'] = str(self.store.provider.price_to_quik_price(class_code, sec_code, order.pricelimit))  # Переводим цену в цену QUIK
+                transaction['PRICE'] = str(self.store.provider.price_to_quik_price(class_code, sec_code, order.pricelimit))  # Лимитная цена QUIK
             expiry_date = 'GTC'  # По умолчанию будем держать заявку до отмены GTC = Good Till Cancelled
             if order.valid in [Order.DAY, 0]:  # Если заявка поставлена на день
                 expiry_date = 'TODAY'  # то будем держать ее до окончания текущей торговой сессии
