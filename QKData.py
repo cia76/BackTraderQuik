@@ -39,6 +39,7 @@ class QKData(with_metaclass(MetaQKData, AbstractDataBase)):
     def __init__(self, **kwargs):
         self.store = QKStore(**kwargs)  # Хранилище QUIK
         self.class_code, self.sec_code = self.store.provider.dataname_to_class_sec_codes(self.p.dataname)  # По тикеру получаем код режима торгов и тикер
+        self.derivative = self.class_code == 'SPBFUT'  # Для деривативов не используем конвертацию цен и кол-ва
         self.quik_timeframe = self.bt_timeframe_to_quik_timeframe(self.p.timeframe, self.p.compression)  # Конвертируем временной интервал из BackTrader в QUIK
         self.tf = self.bt_timeframe_to_tf(self.p.timeframe, self.p.compression)  # Конвертируем временной интервал из BackTrader для имени файла истории и расписания
         self.file = f'{self.class_code}.{self.sec_code}_{self.tf}'  # Имя файла истории
@@ -90,7 +91,9 @@ class QKData(with_metaclass(MetaQKData, AbstractDataBase)):
             self.last_bar_received = len(new_bars) == 1  # Если в хранилище остался 1 бар, то мы будем получать последний возможный бар
             if self.last_bar_received:  # Получаем последний возможный бар
                 self.logger.debug('Получение последнего возможного на данный момент бара')
-            bar = self.store.new_bars.pop(0)['data']  # Берем и удаляем первый бар из хранилища новых бар. С ним будем работать
+            bar = new_bars[0]  # Берем первый бар из хранилища новых бар. С ним будем работать
+            self.store.new_bars.remove(bar)  # Удаляем этот бар из хранилища новых бар
+            bar = bar['data']  # Данные бара
             if not self.is_bar_valid(bar):  # Если бар не соответствует всем условиям выборки
                 return None  # то пропускаем бар, будем заходить еще
             self.logger.debug(f'Сохранение нового бара с {bar["datetime"].strftime(self.dt_format)} в файл')
@@ -103,11 +106,11 @@ class QKData(with_metaclass(MetaQKData, AbstractDataBase)):
                 self.live_mode = False  # Переходим в режим получения истории
         # Все проверки пройдены. Записываем полученный исторический/новый бар с ценами в рублях за штуку
         self.lines.datetime[0] = date2num(bar['datetime'])  # Переводим в формат хранения даты/времени в BackTrader
-        self.lines.open[0] = self.store.provider.quik_price_to_price(self.class_code, self.sec_code, bar['open'])
-        self.lines.high[0] = self.store.provider.quik_price_to_price(self.class_code, self.sec_code, bar['high'])
-        self.lines.low[0] = self.store.provider.quik_price_to_price(self.class_code, self.sec_code, bar['low'])
-        self.lines.close[0] = self.store.provider.quik_price_to_price(self.class_code, self.sec_code, bar['close'])
-        self.lines.volume[0] = int(bar['volume'])
+        self.lines.open[0] = bar['open'] if self.derivative else self.store.provider.quik_price_to_price(self.class_code, self.sec_code, bar['open'])  # Для деривативов
+        self.lines.high[0] = bar['high'] if self.derivative else self.store.provider.quik_price_to_price(self.class_code, self.sec_code, bar['high'])  # цена без изменения
+        self.lines.low[0] = bar['low'] if self.derivative else self.store.provider.quik_price_to_price(self.class_code, self.sec_code, bar['low'])  # Для остальных
+        self.lines.close[0] = bar['close'] if self.derivative else self.store.provider.quik_price_to_price(self.class_code, self.sec_code, bar['close'])  # цена за штуку в рублях
+        self.lines.volume[0] = int(bar['volume']) if self.derivative else self.store.provider.lots_to_size(self.class_code, self.sec_code, int(bar['volume']))  # Для деривативов кол-во лотов. Для остальных кол-во штук
         self.lines.openinterest[0] = 0  # Открытый интерес в QUIK не учитывается
         return True  # Будем заходить сюда еще
 
@@ -151,7 +154,7 @@ class QKData(with_metaclass(MetaQKData, AbstractDataBase)):
         for history_bar in history_bars:  # Пробегаемся по всем полученным барам
             bar = dict(datetime=self.store.get_bar_open_date_time(history_bar),  # Собираем дату и время открытия бара
                        open=history_bar['open'], high=history_bar['high'], low=history_bar['low'], close=history_bar['close'],  # Цены QUIK
-                       volume=self.store.provider.lots_to_size(self.class_code, self.sec_code, history_bar['volume']))  # Объем в штуках
+                       volume=int(history_bar['volume']))  # Объем в лотах. Бар из истории
             if self.is_bar_valid(bar):  # Если исторический бар соответствует всем условиям выборки
                 self.history_bars.append(bar)  # то добавляем бар
                 self.save_bar_to_file(bar)  # и сохраняем бар в конец файла
@@ -164,10 +167,10 @@ class QKData(with_metaclass(MetaQKData, AbstractDataBase)):
         """Проверка бара на соответствие условиям выборки"""
         dt_open = bar['datetime']  # Дата и время открытия бара МСК
         if dt_open <= self.dt_last_open:  # Если пришел бар из прошлого (дата открытия меньше последней даты открытия)
-            # self.logger.debug(f'Дата/время открытия бара {dt_open} <= последней даты/времени открытия {self.dt_last_open}')
+            self.logger.debug(f'Дата/время открытия бара {dt_open} <= последней даты/времени открытия {self.dt_last_open}')
             return False  # то бар не соответствует условиям выборки
         if self.p.fromdate and dt_open < self.p.fromdate or self.p.todate and dt_open > self.p.todate:  # Если задан диапазон, а бар за его границами
-            # self.logger.debug(f'Дата/время открытия бара {dt_open} за границами диапазона {self.p.fromdate} - {self.p.todate}')
+            self.logger.debug(f'Дата/время открытия бара {dt_open} за границами диапазона {self.p.fromdate} - {self.p.todate}')
             self.dt_last_open = dt_open  # Запоминаем дату/время открытия пришедшего бара для будущих сравнений
             return False  # то бар не соответствует условиям выборки
         if self.p.sessionstart != time.min and dt_open.time() < self.p.sessionstart:  # Если задано время начала сессии и открытие бара до этого времени
@@ -207,7 +210,7 @@ class QKData(with_metaclass(MetaQKData, AbstractDataBase)):
             stream_bar = bars[0]  # Последний бар
             bar = dict(datetime=self.store.get_bar_open_date_time(stream_bar),  # Собираем дату и время открытия бара
                        open=stream_bar['open'], high=stream_bar['high'], low=stream_bar['low'], close=stream_bar['close'],  # Цены QUIK
-                       volume=self.store.provider.lots_to_size(self.class_code, self.sec_code, stream_bar['volume']))  # Бар по расписанию
+                       volume=int(stream_bar['volume']))  # Объем в лотах. Бар по расписанию
             self.logger.debug('Получен бар по расписанию')
             self.store.new_bars.append(dict(guid=self.guid, data=bar))  # Добавляем в хранилище новых бар
 
