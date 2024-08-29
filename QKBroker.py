@@ -184,8 +184,8 @@ class QKBroker(with_metaclass(MetaQKBroker, BrokerBase)):
             else SellOrder(owner=owner, data=data, size=size, price=price, pricelimit=plimit, exectype=exectype, valid=valid, oco=oco, parent=parent, transmit=transmit)  # Заявка на покупку/продажу
         order.addcomminfo(self.getcommissioninfo(data))  # По тикеру выставляем комиссии в заявку. Нужно для исполнения заявки в BackTrader
         order.addinfo(**kwargs)  # Передаем в заявку все дополнительные свойства из брокера, в т.ч. account_id
-        class_code, sec_code = self.store.provider.dataname_to_class_sec_codes(data._name)  # Из названия тикера получаем код режима торгов и тикера
-        order.addinfo(class_code=class_code, sec_code=sec_code)  # Передаем в заявку код режима торгов и тикера
+        class_code = data.class_code  # Код режима торгов
+        sec_code = data.sec_code  # Тикер
         if 'account_id' in order.info:  # Если передали номер счета
             account = self.store.provider.accounts[order.info['account_id']]  # то получаем счет по номеру
             if class_code not in account['class_codes']:  # Если в этом счете нет режима торгов тикера
@@ -224,17 +224,9 @@ class QKBroker(with_metaclass(MetaQKBroker, BrokerBase)):
 
     def place_order(self, order):
         """Отправка заявки (транзакции) на биржу"""
-        class_code = order.info['class_code']  # Получаем из заявки код режима торгов
-        sec_code = order.info['sec_code']  # Получаем из заявки код тикера
-        quantity = abs(self.store.provider.size_to_lots(class_code, sec_code, order.size))  # Размер позиции в лотах. В QUIK всегда передается положительный размер лота
-        price = order.price  # Цена заявки
-        min_price_step = order.info['min_price_step']  # Получаем из заявки минимальный шаг цены
-        slippage = min_price_step * self.p.slippage_steps  # Размер проскальзывания в деньгах для выставления рыночной цены фьючерсов
-        if order.exectype == Order.Market:  # Для рыночных заявок
-            price = 0.00  # Цена рыночной заявки должна быть нулевой (кроме рынка фьючерсов)
-            if class_code == 'SPBFUT':  # Для рынка фьючерсов
-                last_price = float(self.store.provider.get_param_ex(class_code, sec_code, 'LAST')['data']['param_value'])  # Последняя цена сделки
-                price = last_price + slippage if order.isbuy() else last_price - slippage  # Из документации QUIK: При покупке/продаже фьючерсов по рынку нужно ставить цену хуже последней сделки
+        class_code = order.data.class_code  # Получаем из заявки код режима торгов
+        sec_code = order.data.sec_code  # Получаем из заявки код тикера
+        quantity = abs(order.size if order.data.derivative else self.store.provider.size_to_lots(class_code, sec_code, order.size))  # Размер позиции в лотах. В QUIK всегда передается положительный размер лота
         transaction = {  # Все значения должны передаваться в виде строк
             'TRANS_ID': str(order.ref),  # Номер транзакции задается клиентом
             # Если для заявок брокер устанавливает отдельный код клиента, то задаем его в параметре client_code_for_orders, и используем здесь
@@ -244,21 +236,41 @@ class QKBroker(with_metaclass(MetaQKBroker, BrokerBase)):
             'CLASSCODE': class_code,  # Код режима торгов
             'SECCODE': sec_code,  # Код тикера
             'OPERATION': 'B' if order.isbuy() else 'S',  # B = покупка, S = продажа
-            'QUANTITY': str(quantity)}  # Кол-во в лотах
-        if order.exectype in [Order.Market, Order.Limit]:  # Для рыночной/лимитной заявки
-            transaction['ACTION'] = 'NEW_ORDER'  # Новая рыночная или лимитная заявка
-            transaction['TYPE'] = 'L' if order.exectype == Order.Limit else 'M'  # L = лимитная заявка (по умолчанию), M = рыночная заявка
-            transaction['PRICE'] = str(self.store.provider.price_to_quik_price(class_code, sec_code, price))  # Рыночная/лимитная цена QUIK
-        else:  # Для стоп/стоп лимитной заявки
-            transaction['ACTION'] = 'NEW_STOP_ORDER'  # Новая стоп заявка
-            transaction['STOPPRICE'] = str(self.store.provider.price_to_quik_price(class_code, sec_code, price))  # Стоп цена QUIK
-            if order.exectype == Order.Stop:  # Для стоп заявки
-                stop_market_price = 0.00  # Цена рыночной заявки должна быть нулевой (кроме рынка фьючерсов)
-                if class_code == 'SPBFUT':  # Для рынка фьючерсов
-                    stop_market_price = price + slippage if order.isbuy() else price - slippage  # Из документации QUIK: При покупке/продаже фьючерсов по рынку нужно ставить цену хуже последней сделки
-                transaction['PRICE'] = str(self.store.provider.price_to_quik_price(class_code, sec_code, stop_market_price))  # Рыночная цена QUIK
-            else:  # Для стоп лимитной заявки
-                transaction['PRICE'] = str(self.store.provider.price_to_quik_price(class_code, sec_code, order.pricelimit))  # Лимитная цена QUIK
+            'QUANTITY': str(quantity),  # Кол-во в лотах
+            'ACTION': 'NEW_ORDER' if order.exectype in (Order.Market, Order.Limit) else 'NEW_STOP_ORDER'}  # Заявка или стоп заявка
+        min_price_step = order.info['min_price_step']  # Получаем из заявки минимальный шаг цены
+        slippage = min_price_step * self.p.slippage_steps  # Размер проскальзывания в деньгах для выставления рыночной цены фьючерсов
+        if order.exectype == Order.Market:  # Рыночная заявка
+            transaction['TYPE'] = 'M'  # Рыночная заявка
+            if order.data.derivative:  # Из документации QUIK: При покупке/продаже фьючерсов по рынку нужно ставить цену хуже последней сделки
+                last_price = float(self.store.provider.get_param_ex(class_code, sec_code, 'LAST')['data']['param_value'])  # Последняя цена сделки
+                market_price = self.store.provider.price_to_valid_price(class_code, sec_code, last_price + slippage if order.isbuy() else last_price - slippage)  # Цена хуже последней сделки
+            else:  # Для остальных рынков
+                market_price = 0  # Цена рыночной заявки должна быть нулевой
+            transaction['PRICE'] = str(market_price)  # Рыночная цена QUIK
+            order.price = market_price  # Сохраняем в заявку рыночную цену заявки
+        elif order.exectype == Order.Limit:  # Лимитная заявка
+            transaction['TYPE'] = 'L'  # Лимитная заявка
+            limit_price = self.store.provider.price_to_valid_price(class_code, sec_code, order.price) if order.data.derivative else self.store.provider.price_to_quik_price(class_code, sec_code, order.price)  # Лимитная цена
+            transaction['PRICE'] = str(limit_price)  # Лимитная цена QUIK
+            order.price = limit_price  # Сохраняем в заявку лимитную цену заявки
+        elif order.exectype == Order.Stop:  # Стоп заявка
+            stop_price = self.store.provider.price_to_valid_price(class_code, sec_code, order.price) if order.data.derivative else self.store.provider.price_to_quik_price(class_code, sec_code, order.price)  # Стоп цена
+            transaction['STOPPRICE'] = str(stop_price)  # Стоп цена QUIK
+            if order.data.derivative:  # Из документации QUIK: При покупке/продаже фьючерсов по рынку нужно ставить цену хуже последней сделки
+                market_price = self.store.provider.price_to_valid_price(class_code, sec_code, stop_price + slippage if order.isbuy() else stop_price - slippage)  # Цена хуже последней сделки
+            else:  # Для остальных рынков
+                market_price = 0  # Цена рыночной заявки должна быть нулевой
+            transaction['PRICE'] = str(market_price)  # Рыночная цена QUIK
+            order.price = stop_price  # Сохраняем в заявку стоп цену заявки
+        elif order.exectype == Order.StopLimit:  # Стоп-лимитная заявка
+            stop_price = self.store.provider.price_to_valid_price(class_code, sec_code, order.price) if order.data.derivative else self.store.provider.price_to_quik_price(class_code, sec_code, order.price)  # Стоп цена
+            transaction['STOPPRICE'] = str(stop_price)  # Стоп цена QUIK
+            limit_price = self.store.provider.price_to_valid_price(class_code, sec_code, order.pricelimit) if order.data.derivative else self.store.provider.price_to_quik_price(class_code, sec_code, order.pricelimit)  # Лимитная цена
+            transaction['PRICE'] = str(limit_price)  # Лимитная цена QUIK
+            order.price = stop_price  # Сохраняем в заявку стоп цену заявки
+            order.pricelimit = limit_price  # Сохраняем в заявку лимитную цену заявки
+        if order.exectype in (Order.Stop, Order.StopLimit):  # Для стоп заявок
             expiry_date = 'GTC'  # По умолчанию будем держать заявку до отмены GTC = Good Till Cancelled
             if order.valid in [Order.DAY, 0]:  # Если заявка поставлена на день
                 expiry_date = 'TODAY'  # то будем держать ее до окончания текущей торговой сессии
@@ -283,8 +295,8 @@ class QKBroker(with_metaclass(MetaQKBroker, BrokerBase)):
         is_stop = order.exectype in [Order.Stop, Order.StopLimit] and isinstance(self.store.provider.get_order_by_number(order_num)['data'], int)  # Задана стоп заявка и лимитная заявка не выставлена
         transaction = {
             'TRANS_ID': str(order.ref),  # Номер транзакции задается клиентом
-            'CLASSCODE': order.info['class_code'],  # Получаем из заявки код режима торгов
-            'SECCODE': order.info['sec_code']}  # Получаем из заявки код тикера
+            'CLASSCODE': order.data.class_code,  # Получаем из заявки код режима торгов
+            'SECCODE': order.data.sec_code}  # Получаем из заявки код тикера
         if is_stop:  # Для стоп заявки
             transaction['ACTION'] = 'KILL_STOP_ORDER'  # Будем удалять стоп заявку
             transaction['STOP_ORDER_KEY'] = str(order_num)  # Номер стоп заявки на бирже
