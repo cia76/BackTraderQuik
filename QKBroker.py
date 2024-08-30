@@ -51,13 +51,19 @@ class QKBroker(with_metaclass(MetaQKBroker, BrokerBase)):
         """Свободные средства по всем счетам, по счету"""
         if not self.store.BrokerCls:  # Если брокера нет в хранилище
             return 0
+        acc = None  # Счет. Нужен, если считаем свободные средства по счету
+        if account_id is not None:  # Если считаем свободные средства по счету
+            acc = next((account for account in self.store.provider.accounts if account['account_id'] == account_id), None)  # то пытаемся найти счет
+            if not acc:  # Если счет не найден
+                self.logger.error(f'getcash: Счет номер {account_id} не найден. Проверьте правильность номера счета')
+                return 0
         money_limits = self.store.provider.get_money_limits()['data']  # Все денежные лимиты (остатки на счетах)
         if len(money_limits) == 0:  # Если денежных лимитов нет
             self.logger.error('getcash: QUIK не вернул денежные лимиты (остатки на счетах). Свяжитесь с брокером')
             return 0
         cash = 0  # Будем набирать свободные средства
         for account in self.store.provider.accounts:  # Пробегаемся по всем счетам (Коды клиента/Фирма/Счет)
-            if account_id is not None and account != self.store.provider.accounts[account_id]:  # Если считаем свободные средства по счету, и это не требуемый счет
+            if account_id is not None and account != acc:  # Если считаем свободные средства по счету, и это не требуемый счет
                 continue  # то переходим к следующему счету, дальше не продолжаем
             if account['futures']:  # Для фьючерсов
                 # Видео: https://www.youtube.com/watch?v=u2C7ElpXZ4k
@@ -186,14 +192,19 @@ class QKBroker(with_metaclass(MetaQKBroker, BrokerBase)):
         order.addinfo(**kwargs)  # Передаем в заявку все дополнительные свойства из брокера, в т.ч. account_id
         class_code = data.class_code  # Код режима торгов
         sec_code = data.sec_code  # Тикер
+        if order.exectype in (Order.Close, Order.StopTrail, Order.StopTrailLimit, Order.Historical):  # Эти типы заявок не реализованы
+            self.logger.warning(f'Постановка заявки {order.ref} по тикеру {class_code}.{sec_code} отклонена. Работа с заявками {order.exectype} не реализована')
+            order.reject(self)  # то отклоняем заявку
+            self.oco_pc_check(order)  # Проверяем связанные и родительскую/дочерние заявки
+            return order  # Возвращаем отклоненную заявку
         if 'account_id' in order.info:  # Если передали номер счета
-            account = self.store.provider.accounts[order.info['account_id']]  # то получаем счет по номеру
-            if class_code not in account['class_codes']:  # Если в этом счете нет режима торгов тикера
+            account = next((account for account in self.store.provider.accounts if account['account_id'] == order.info['account_id']), None)  # то получаем счет по номеру
+            if account and class_code not in account['class_codes']:  # Если в этом счете нет режима торгов тикера
                 account = None  # то счет не найден
         else:  # Если не передали номер счета
             account = next((account for account in self.store.provider.accounts if class_code in account['class_codes']), None)  # то ищем первый счет с режимом торгов тикера
         if not account:  # Если счет не найден
-            self.logger.error(f'create_order: Постановка заявки {order.ref} по тикеру {class_code}.{sec_code} отменена. Не найден счет для режима торгов {class_code}')
+            self.logger.error(f'create_order: Постановка заявки {order.ref} по тикеру {class_code}.{sec_code} отменена. Не найден счет')
             order.reject(self)  # то отменяем заявку (статус Order.Rejected)
             return order  # Возвращаем отмененную заявку
         order.addinfo(account=account)  # Передаем в заявку счет
@@ -203,6 +214,7 @@ class QKBroker(with_metaclass(MetaQKBroker, BrokerBase)):
             order.reject(self)  # то отменяем заявку (статус Order.Rejected)
             return order  # Возвращаем отмененную заявку
         order.addinfo(min_price_step=float(si['min_price_step']))  # Передаем в заявку минимальный шаг цены
+
         if oco:  # Если есть связанная заявка
             self.ocos[order.ref] = oco.ref  # то заносим в список связанных заявок
         if not transmit or parent:  # Для родительской/дочерних заявок
@@ -424,7 +436,7 @@ class QKBroker(with_metaclass(MetaQKBroker, BrokerBase)):
             return  # то выходим, дальше не продолжаем
         self.trade_nums[dataname].append(trade_num)  # Запоминаем номер сделки по тикеру, чтобы в будущем ее не обрабатывать (фильтр для дублей)
         size = int(qk_trade['qty'])  # Абсолютное кол-во
-        if self.p.lots:  # Если входящий остаток в лотах
+        if self.p.lots and not data.derivative:  # Если входящий остаток в лотах не для деривативов
             size = self.store.provider.lots_to_size(class_code, sec_code, size)  # то переводим кол-во из лотов в штуки
         if qk_trade['flags'] & 0b100 == 0b100:  # Если сделка на продажу (бит 2)
             size *= -1  # то кол-во ставим отрицательным
