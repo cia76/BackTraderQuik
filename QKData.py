@@ -104,12 +104,12 @@ class QKData(with_metaclass(MetaQKData, AbstractDataBase)):
             elif self.live_mode and not self.last_bar_received:  # Если находимся в режиме получения новых бар (LIVE)
                 self.put_notification(self.DELAYED)  # Отправляем уведомление об отправке исторических (не новых) бар
                 self.live_mode = False  # Переходим в режим получения истории
-        # Все проверки пройдены. Записываем полученный исторический/новый бар с ценами в рублях за штуку
+        # Все проверки пройдены. Записываем полученный исторический/новый бар
         self.lines.datetime[0] = date2num(bar['datetime'])  # Переводим в формат хранения даты/времени в BackTrader
         self.lines.open[0] = bar['open'] if self.derivative else self.store.provider.quik_price_to_price(self.class_code, self.sec_code, bar['open'])  # Для деривативов
         self.lines.high[0] = bar['high'] if self.derivative else self.store.provider.quik_price_to_price(self.class_code, self.sec_code, bar['high'])  # цена без изменения
         self.lines.low[0] = bar['low'] if self.derivative else self.store.provider.quik_price_to_price(self.class_code, self.sec_code, bar['low'])  # Для остальных
-        self.lines.close[0] = bar['close'] if self.derivative else self.store.provider.quik_price_to_price(self.class_code, self.sec_code, bar['close'])  # цена за штуку в рублях
+        self.lines.close[0] = bar['close'] if self.derivative else self.store.provider.quik_price_to_price(self.class_code, self.sec_code, bar['close'])  # цена в рублях за штуку
         self.lines.volume[0] = int(bar['volume']) if self.derivative else self.store.provider.lots_to_size(self.class_code, self.sec_code, int(bar['volume']))  # Для деривативов кол-во лотов. Для остальных кол-во штук
         self.lines.openinterest[0] = 0  # Открытый интерес в QUIK не учитывается
         return True  # Будем заходить сюда еще
