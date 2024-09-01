@@ -1,5 +1,5 @@
 import logging  # Будем вести лог
-import collections
+from collections import defaultdict, OrderedDict, deque  # Словари и очередь
 from datetime import datetime, date
 
 from backtrader import BrokerBase, Order, BuyOrder, SellOrder
@@ -31,14 +31,14 @@ class QKBroker(with_metaclass(MetaQKBroker, BrokerBase)):
     def __init__(self, **kwargs):
         super(QKBroker, self).__init__()
         self.store = QKStore(**kwargs)  # Хранилище QUIK
-        self.notifs = collections.deque()  # Очередь уведомлений брокера о заявках
+        self.notifs = deque()  # Очередь уведомлений брокера о заявках
         self.startingcash = self.cash = 0  # Стартовые и текущие все свободные средства
         self.startingvalue = self.value = 0  # Стартовая и текущая стоимость всех позиций
         self.trade_nums = {}  # Список номеров сделок по тикеру для фильтрации дублей сделок
-        self.positions = collections.defaultdict(Position)  # Список позиций
-        self.orders = collections.OrderedDict()  # Список заявок, отправленных на биржу
+        self.positions = defaultdict(Position)  # Список позиций
+        self.orders = OrderedDict()  # Список заявок, отправленных на биржу
         self.ocos = {}  # Список связанных заявок (One Cancel Others)
-        self.pcs = collections.defaultdict(collections.deque)  # Очередь всех родительских/дочерних заявок (Parent - Children)
+        self.pcs = defaultdict(deque)  # Очередь всех родительских/дочерних заявок (Parent - Children)
 
         self.store.provider.on_trans_reply = self.on_trans_reply  # Ответ на транзакцию пользователя
         self.store.provider.on_trade = self.on_trade  # Получение новой / изменение существующей сделки
@@ -162,11 +162,11 @@ class QKBroker(with_metaclass(MetaQKBroker, BrokerBase)):
                 for active_futures_holding in active_futures_holdings:  # Пробегаемся по всем активным фьючерсным позициям
                     class_code = 'SPBFUT'  # Код режима торгов для фьючерсов
                     sec_code = active_futures_holding['sec_code']  # Код тикера
-                    dataname = self.store.provider.class_sec_codes_to_dataname(class_code, sec_code)  # Получаем название тикера по коду режима торгов и тикера
                     size = int(active_futures_holding['totalnet'])  # Кол-во
                     if self.p.lots:  # Если входящий остаток в лотах
                         size = self.store.provider.lots_to_size(class_code, sec_code, size)  # то переводим кол-во из лотов в штуки
                     price = self.store.provider.quik_price_to_price(class_code, sec_code, float(active_futures_holding['avrposnprice']))  # Переводим эффективную цену позиций (входа) в цену в рублях за штуку
+                    dataname = self.store.provider.class_sec_codes_to_dataname(class_code, sec_code)  # Получаем название тикера по коду режима торгов и тикера
                     self.positions[dataname] = Position(size, price)  # Сохраняем в списке открытых позиций
             else:  # Для остальных фирм
                 depo_limits = self.store.provider.get_all_depo_limits()['data']  # Все лимиты по бумагам (позиции по инструментам)
@@ -177,11 +177,11 @@ class QKBroker(with_metaclass(MetaQKBroker, BrokerBase)):
                                        depo_limit['currentbal'] != 0]  # только открытые позиции
                 for firm_kind_depo_limit in account_depo_limits:  # Пробегаемся по всем позициям
                     class_code, sec_code = self.store.provider.dataname_to_class_sec_codes(firm_kind_depo_limit['sec_code'])  # По коду тикера без кода режима торгов получаем код режима торгов и тикера
-                    dataname = self.store.provider.class_sec_codes_to_dataname(class_code, sec_code)  # Получаем название тикера по коду режима торгов и тикера
                     size = int(firm_kind_depo_limit['currentbal'])  # Кол-во
                     if self.p.lots:  # Если входящий остаток в лотах
                         size = self.store.provider.lots_to_size(class_code, sec_code, size)  # то переводим кол-во из лотов в штуки
                     price = self.store.provider.quik_price_to_price(class_code, sec_code, float(firm_kind_depo_limit['wa_position_price']))  # Переводим средневзвешенную цену приобретения позиции (входа) в цену в рублях за штуку
+                    dataname = self.store.provider.class_sec_codes_to_dataname(class_code, sec_code)  # Получаем название тикера по коду режима торгов и тикера
                     self.positions[dataname] = Position(size, price)  # Сохраняем в списке открытых позиций
 
     def create_order(self, owner, data, size, price=None, plimit=None, exectype=None, valid=None, oco=None, parent=None, transmit=True, is_buy=True, **kwargs):
@@ -234,11 +234,13 @@ class QKBroker(with_metaclass(MetaQKBroker, BrokerBase)):
         # Если не последняя заявка в цепочке родительской/дочерних заявок (transmit=False)
         return order  # то возвращаем созданную заявку со статусом Created. На биржу ее пока не ставим
 
-    def place_order(self, order):
+    def place_order(self, order: Order):
         """Отправка заявки (транзакции) на биржу"""
         class_code = order.data.class_code  # Получаем из заявки код режима торгов
         sec_code = order.data.sec_code  # Получаем из заявки код тикера
         quantity = abs(order.size if order.data.derivative else self.store.provider.size_to_lots(class_code, sec_code, order.size))  # Размер позиции в лотах. В QUIK всегда передается положительный размер лота
+        if order.data.derivative:  # Для деривативов
+            order.size = self.store.provider.lots_to_size(class_code, sec_code, order.size)  # сохраняем в заявку размер позиции в штуках
         transaction = {  # Все значения должны передаваться в виде строк
             'TRANS_ID': str(order.ref),  # Номер транзакции задается клиентом
             # Если для заявок брокер устанавливает отдельный код клиента, то задаем его в параметре client_code_for_orders, и используем здесь
@@ -254,34 +256,35 @@ class QKBroker(with_metaclass(MetaQKBroker, BrokerBase)):
         slippage = min_price_step * self.p.slippage_steps  # Размер проскальзывания в деньгах для выставления рыночной цены фьючерсов
         if order.exectype == Order.Market:  # Рыночная заявка
             transaction['TYPE'] = 'M'  # Рыночная заявка
-            if order.data.derivative:  # Из документации QUIK: При покупке/продаже фьючерсов по рынку нужно ставить цену хуже последней сделки
+            if order.data.derivative:  # Для деривативов
                 last_price = float(self.store.provider.get_param_ex(class_code, sec_code, 'LAST')['data']['param_value'])  # Последняя цена сделки
-                market_price = self.store.provider.price_to_valid_price(class_code, sec_code, last_price + slippage if order.isbuy() else last_price - slippage)  # Цена хуже последней сделки
+                market_price = self.store.provider.price_to_valid_price(class_code, sec_code, last_price + slippage if order.isbuy() else last_price - slippage)  # Из документации QUIK: При покупке/продаже фьючерсов по рынку нужно ставить цену хуже последней сделки
             else:  # Для остальных рынков
                 market_price = 0  # Цена рыночной заявки должна быть нулевой
-            transaction['PRICE'] = str(market_price)  # Рыночная цена QUIK
-            order.price = market_price  # Сохраняем в заявку рыночную цену заявки
+            transaction['PRICE'] = str(market_price)  # Рыночную цену QUIK ставим в заявку
         elif order.exectype == Order.Limit:  # Лимитная заявка
             transaction['TYPE'] = 'L'  # Лимитная заявка
             limit_price = self.store.provider.price_to_valid_price(class_code, sec_code, order.price) if order.data.derivative else self.store.provider.price_to_quik_price(class_code, sec_code, order.price)  # Лимитная цена
-            transaction['PRICE'] = str(limit_price)  # Лимитная цена QUIK
-            order.price = limit_price  # Сохраняем в заявку лимитную цену заявки
+            transaction['PRICE'] = str(limit_price)  # Лимитную цену QUIK Ставим в заявку
+            if order.data.derivative:  # Для деривативов
+                order.price = self.store.provider.quik_price_to_price(class_code, sec_code, order.price)  # Сохраняем в заявку лимитную цену заявки в рублях за штуку
         elif order.exectype == Order.Stop:  # Стоп заявка
             stop_price = self.store.provider.price_to_valid_price(class_code, sec_code, order.price) if order.data.derivative else self.store.provider.price_to_quik_price(class_code, sec_code, order.price)  # Стоп цена
-            transaction['STOPPRICE'] = str(stop_price)  # Стоп цена QUIK
-            if order.data.derivative:  # Из документации QUIK: При покупке/продаже фьючерсов по рынку нужно ставить цену хуже последней сделки
-                market_price = self.store.provider.price_to_valid_price(class_code, sec_code, stop_price + slippage if order.isbuy() else stop_price - slippage)  # Цена хуже последней сделки
+            transaction['STOPPRICE'] = str(stop_price)  # Стоп цену QUIK ставим в заявкуСтавим в заявку
+            if order.data.derivative:  # Для деривативов
+                order.price = self.store.provider.quik_price_to_price(class_code, sec_code, order.price)  # Сохраняем в заявку стоп цену заявки в рублях за штуку
+                market_price = self.store.provider.price_to_valid_price(class_code, sec_code, stop_price + slippage if order.isbuy() else stop_price - slippage)  # Из документации QUIK: При покупке/продаже фьючерсов по рынку нужно ставить цену хуже последней сделки
             else:  # Для остальных рынков
                 market_price = 0  # Цена рыночной заявки должна быть нулевой
-            transaction['PRICE'] = str(market_price)  # Рыночная цена QUIK
-            order.price = stop_price  # Сохраняем в заявку стоп цену заявки
+            transaction['PRICE'] = str(market_price)  # Рыночную цену QUIK ставим в заявку
         elif order.exectype == Order.StopLimit:  # Стоп-лимитная заявка
             stop_price = self.store.provider.price_to_valid_price(class_code, sec_code, order.price) if order.data.derivative else self.store.provider.price_to_quik_price(class_code, sec_code, order.price)  # Стоп цена
-            transaction['STOPPRICE'] = str(stop_price)  # Стоп цена QUIK
+            transaction['STOPPRICE'] = str(stop_price)  # Стоп цену QUIK ставим в заявку
             limit_price = self.store.provider.price_to_valid_price(class_code, sec_code, order.pricelimit) if order.data.derivative else self.store.provider.price_to_quik_price(class_code, sec_code, order.pricelimit)  # Лимитная цена
-            transaction['PRICE'] = str(limit_price)  # Лимитная цена QUIK
-            order.price = stop_price  # Сохраняем в заявку стоп цену заявки
-            order.pricelimit = limit_price  # Сохраняем в заявку лимитную цену заявки
+            transaction['PRICE'] = str(limit_price)  # Лимитную цену QUIK Ставим в заявку
+            if order.data.derivative:  # Для деривативов
+                order.price = self.store.provider.quik_price_to_price(class_code, sec_code, order.price)  # Сохраняем в заявку стоп цену заявки в рублях за штуку
+                order.pricelimit = self.store.provider.quik_price_to_price(class_code, sec_code, order.pricelimit)  # Сохраняем в заявку лимитную цену заявки в рублях за штуку
         if order.exectype in (Order.Stop, Order.StopLimit):  # Для стоп заявок
             expiry_date = 'GTC'  # По умолчанию будем держать заявку до отмены GTC = Good Till Cancelled
             if order.valid in [Order.DAY, 0]:  # Если заявка поставлена на день
@@ -304,12 +307,12 @@ class QKBroker(with_metaclass(MetaQKBroker, BrokerBase)):
         if order.ref not in self.orders:  # Если заявка не найдена
             return  # то выходим, дальше не продолжаем
         order_num = order.info['order_num']  # Получаем из заявки номер заявки на бирже
-        is_stop = order.exectype in [Order.Stop, Order.StopLimit] and isinstance(self.store.provider.get_order_by_number(order_num)['data'], int)  # Задана стоп заявка и лимитная заявка не выставлена
+        stop_order = order.exectype in [Order.Stop, Order.StopLimit] and isinstance(self.store.provider.get_order_by_number(order_num)['data'], int)  # Задана стоп заявка и лимитная заявка не выставлена
         transaction = {
             'TRANS_ID': str(order.ref),  # Номер транзакции задается клиентом
             'CLASSCODE': order.data.class_code,  # Получаем из заявки код режима торгов
             'SECCODE': order.data.sec_code}  # Получаем из заявки код тикера
-        if is_stop:  # Для стоп заявки
+        if stop_order:  # Для стоп заявки
             transaction['ACTION'] = 'KILL_STOP_ORDER'  # Будем удалять стоп заявку
             transaction['STOP_ORDER_KEY'] = str(order_num)  # Номер стоп заявки на бирже
         else:  # Для лимитной заявки
@@ -363,13 +366,14 @@ class QKBroker(with_metaclass(MetaQKBroker, BrokerBase)):
             self.logger.debug(f'on_trans_reply: Заявка {order.ref} переведена в статус принята на бирже (Order.Accepted)')
             order.accept(self)  # Заявка принята на бирже (Order.Accepted)
         elif 'снят' in result_msg:  # Если пришел ответ по отмене существующей заявки
-            try:  # TODO В BT очень редко при order.cancel() возникает ошибка:
-                #    order.py, line 487, in cancel
-                #    self.executed.dt = self.data.datetime[0]
-                #    linebuffer.py, line 163, in __getitem__
-                #    return self.array[self.idx + ago]
-                #    IndexError: array index out of range
+            try:
                 self.logger.debug(f'on_trans_reply: Заявка {order.ref} переведена в статус отменена (Order.Canceled)')
+                # В BT очень редко при order.cancel() возникает ошибка:
+                # order.py, line 487, in cancel
+                # self.executed.dt = self.data.datetime[0]
+                # linebuffer.py, line 163, in __getitem__
+                # return self.array[self.idx + ago]
+                # IndexError: array index out of range
                 order.cancel()  # Отменяем существующую заявку (Order.Canceled)
             except (KeyError, IndexError):  # При ошибке
                 order.status = Order.Canceled  # все равно ставим статус заявки Order.Canceled
@@ -381,24 +385,26 @@ class QKBroker(with_metaclass(MetaQKBroker, BrokerBase)):
                status == 5 and 'не можете снять' in result_msg or 'превышен лимит' in result_msg:
                 self.logger.debug(f'on_trans_reply: Заявка {order.ref}. Ошибка. Выход')
                 return  # то заявку не отменяем, выходим, дальше не продолжаем
-            try:  # TODO В BT очень редко при order.reject() возникает ошибка:
-                #    order.py, line 480, in reject
-                #    self.executed.dt = self.data.datetime[0]
-                #    linebuffer.py, line 163, in __getitem__
-                #    return self.array[self.idx + ago]
-                #    IndexError: array index out of range
+            try:
                 self.logger.debug(f'on_trans_reply: Заявка {order.ref} переведена в статус отклонена (Order.Rejected)')
+                # В BT очень редко при order.reject() возникает ошибка:
+                # order.py, line 480, in reject
+                # self.executed.dt = self.data.datetime[0]
+                # linebuffer.py, line 163, in __getitem__
+                # return self.array[self.idx + ago]
+                # IndexError: array index out of range
                 order.reject(self)  # Отклоняем заявку (Order.Rejected)
             except (KeyError, IndexError):  # При ошибке
                 order.status = Order.Rejected  # все равно ставим статус заявки Order.Rejected
         elif status == 6:  # Транзакция не прошла проверку лимитов сервера QUIK
-            try:  # TODO В BT очень редко при order.margin() возникает ошибка:
-                #    order.py, line 492, in margin
-                #    self.executed.dt = self.data.datetime[0]
-                #    linebuffer.py, line 163, in __getitem__
-                #    return self.array[self.idx + ago]
-                #    IndexError: array index out of range
+            try:
                 self.logger.debug(f'on_trans_reply: Заявка {order.ref} переведена в статус не прошла проверку лимитов (Order.Margin)')
+                # В BT очень редко при order.margin() возникает ошибка:
+                # order.py, line 492, in margin
+                # self.executed.dt = self.data.datetime[0]
+                # linebuffer.py, line 163, in __getitem__
+                # return self.array[self.idx + ago]
+                # IndexError: array index out of range
                 order.margin()  # Для заявки не хватает средств (Order.Margin)
             except (KeyError, IndexError):  # При ошибке
                 order.status = Order.Margin  # все равно ставим статус заявки Order.Margin
@@ -436,16 +442,17 @@ class QKBroker(with_metaclass(MetaQKBroker, BrokerBase)):
             return  # то выходим, дальше не продолжаем
         self.trade_nums[dataname].append(trade_num)  # Запоминаем номер сделки по тикеру, чтобы в будущем ее не обрабатывать (фильтр для дублей)
         size = int(qk_trade['qty'])  # Абсолютное кол-во
-        if self.p.lots and not data.derivative:  # Если входящий остаток в лотах не для деривативов
+        if self.p.lots:  # Если входящий остаток в лотах
             size = self.store.provider.lots_to_size(class_code, sec_code, size)  # то переводим кол-во из лотов в штуки
         if qk_trade['flags'] & 0b100 == 0b100:  # Если сделка на продажу (бит 2)
             size *= -1  # то кол-во ставим отрицательным
         price = self.store.provider.quik_price_to_price(class_code, sec_code, float(qk_trade['price']))  # Переводим цену QUIK в цену в рублях за штуку
         self.logger.debug(f'on_trade: Заявка {order.ref}. size={size}, price={price}')
-        try:  # TODO Очень редко возникает ошибка:
-            #    linebuffer.py, line 163, in __getitem__
-            #    return self.array[self.idx + ago]
-            #    IndexError: array index out of range
+        try:
+            # В BT очень редко возникает ошибка:
+            # linebuffer.py, line 163, in __getitem__
+            # return self.array[self.idx + ago]
+            # IndexError: array index out of range
             dt = order.data.datetime[0]  # Дата и время исполнения заявки. Последняя известная
             self.logger.debug(f'on_trade: Заявка {order.ref}. Дата/время исполнения заявки по бару {dt}')
         except (KeyError, IndexError):  # При ошибке
