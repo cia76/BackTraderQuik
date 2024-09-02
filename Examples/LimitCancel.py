@@ -92,7 +92,7 @@ if __name__ == '__main__':  # Точка входа при запуске это
     data = store.getdata(dataname=symbol, timeframe=timeframe, compression=compression, fromdate=fromdate, live_bars=live_bars)  # Исторические и новые минутные бары за сегодня по подписке
     # data = store.getdata(dataname=symbol, timeframe=timeframe, compression=compression, fromdate=fromdate, schedule=schedule, live_bars=live_bars)  # Исторические и новые минутные бары за сегодня по расписанию
     cerebro.adddata(data)  # Добавляем данные
-    # cerebro.addsizer(bt.sizers.FixedSize, stake=10)  # Кол-во акций в штуках для покупки/продажи
-    cerebro.addsizer(bt.sizers.FixedSize, stake=1)  # Кол-во фьючерсов в лотах для покупки/продажи
+    cerebro.addsizer(bt.sizers.FixedSize, stake=10)  # Кол-во акций в штуках для покупки/продажи
+    # cerebro.addsizer(bt.sizers.FixedSize, stake=1)  # Кол-во фьючерсов в лотах для покупки/продажи
     cerebro.addstrategy(LimitCancel, limit_pct=1)  # Добавляем торговую систему с лимитным входом в n%
     cerebro.run()  # Запуск торговой системы
