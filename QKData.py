@@ -167,7 +167,7 @@ class QKData(with_metaclass(MetaQKData, AbstractDataBase)):
         """Проверка бара на соответствие условиям выборки"""
         dt_open = bar['datetime']  # Дата и время открытия бара МСК
         if dt_open <= self.dt_last_open:  # Если пришел бар из прошлого (дата открытия меньше последней даты открытия)
-            self.logger.debug(f'Дата/время открытия бара {dt_open} <= последней даты/времени открытия {self.dt_last_open}')
+            # self.logger.debug(f'Дата/время открытия бара {dt_open} <= последней даты/времени открытия {self.dt_last_open}')  # Для отладки, т.к. идет замедление при обработке старых бар на возобновлении подписки
             return False  # то бар не соответствует условиям выборки
         if self.p.fromdate and dt_open < self.p.fromdate or self.p.todate and dt_open > self.p.todate:  # Если задан диапазон, а бар за его границами
             self.logger.debug(f'Дата/время открытия бара {dt_open} за границами диапазона {self.p.fromdate} - {self.p.todate}')
