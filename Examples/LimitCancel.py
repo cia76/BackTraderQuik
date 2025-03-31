@@ -4,7 +4,7 @@ from datetime import datetime
 import backtrader as bt
 
 from BackTraderQuik import QKStore  # Хранилище QUIK
-from MarketPy.Schedule import MOEXStocks, MOEXFutures  # Расписания торгов фондового/срочного рынков
+from MarketPy.MOEX import Stocks, Futures  # Расписания торгов фондового/срочного рынков Московской Биржи
 
 
 # noinspection PyShadowingNames,PyProtectedMember
@@ -72,8 +72,8 @@ if __name__ == '__main__':  # Точка входа при запуске это
     compression = 1  # 1 минута
     fromdate = datetime.today().date()  # За сегодня
     live_bars = True  # Исторические и новые бары
-    schedule = MOEXStocks()  # Расписание торгов фондового рынка
-    # schedule = MOEXFutures()  # Расписание торгов срочного рынка
+    # schedule = Stocks()  # Расписание торгов фондового рынка
+    # schedule = Futures()  # Расписание торгов срочного рынка
 
     logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',  # Формат сообщения
                         datefmt='%d.%m.%Y %H:%M:%S',  # Формат даты
