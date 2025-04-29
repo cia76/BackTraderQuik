@@ -4,7 +4,7 @@ from datetime import datetime
 import backtrader as bt
 
 from BackTraderQuik import QKStore  # Хранилище QUIK
-from MarketPy.MOEX import Stocks, Futures  # Расписания торгов фондового/срочного рынков Московской Биржи
+from FinLabPy.Schedule.MOEX import Stocks, Futures  # Расписания торгов фондового/срочного рынков Московской Биржи
 
 
 # noinspection PyShadowingNames,PyProtectedMember
