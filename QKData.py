@@ -1,5 +1,5 @@
 import logging  # Будем вести лог
-from datetime import datetime, timedelta, time
+from datetime import datetime, timedelta, time, UTC
 from time import sleep
 from uuid import uuid4  # Номера расписаний должны быть уникальными во времени и пространстве
 from threading import Thread, Event  # Поток и событие остановки потока получения новых бар по расписанию биржи
@@ -14,6 +14,7 @@ from BackTraderQuik import QKStore
 
 
 class MetaQKData(AbstractDataBase.__class__):
+    # noinspection PyMethodParameters
     def __init__(cls, name, bases, dct):
         super(MetaQKData, cls).__init__(name, bases, dct)  # Инициализируем класс данных
         QKStore.DataCls = cls  # Регистрируем класс данных в хранилище QUIK
@@ -198,7 +199,7 @@ class QKData(with_metaclass(MetaQKData, AbstractDataBase)):
         """Поток получения новых бар по расписанию биржи"""
         self.logger.debug('Запуск получения новых бар по расписанию')
         while True:
-            market_datetime_now = self.p.schedule.utc_to_msk_datetime(datetime.utcnow())  # Текущее время на бирже
+            market_datetime_now = self.p.schedule.utc_to_msk_datetime(datetime.now(UTC))  # Текущее время на бирже
             trade_bar_request_datetime = self.p.schedule.trade_bar_request_datetime(market_datetime_now, self.tf)  # Дата и время запроса бара на бирже
             sleep_time_secs = (trade_bar_request_datetime - market_datetime_now).total_seconds()  # Время ожидания в секундах
             self.logger.debug(f'Получение последнего бара по расписанию в {trade_bar_request_datetime.strftime(self.dt_format)}. Ожидание {sleep_time_secs} с')
@@ -283,6 +284,7 @@ class QKData(with_metaclass(MetaQKData, AbstractDataBase)):
             return dt_open + timedelta(minutes=self.p.compression * period)  # Время закрытия бара
         elif self.p.timeframe == TimeFrame.Seconds:  # Секундный временной интервал
             return dt_open + timedelta(seconds=self.p.compression * period)  # Время закрытия бара
+        raise NotImplementedError  # С остальными временнЫми интервалами не работаем
 
     def get_quik_date_time_now(self):
         """Текущая дата и время
