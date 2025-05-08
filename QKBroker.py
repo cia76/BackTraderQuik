@@ -11,6 +11,7 @@ from BackTraderQuik import QKStore
 
 # noinspection PyArgumentList
 class MetaQKBroker(BrokerBase.__class__):
+    # noinspection PyMethodParameters
     def __init__(cls, name, bases, dct):
         super(MetaQKBroker, cls).__init__(name, bases, dct)  # Инициализируем класс брокера
         QKStore.BrokerCls = cls  # Регистрируем класс брокера в хранилище QUIK
@@ -303,9 +304,9 @@ class QKBroker(with_metaclass(MetaQKBroker, BrokerBase)):
     def cancel_order(self, order):
         """Отмена заявки"""
         if not order.alive():  # Если заявка уже была завершена
-            return  # то выходим, дальше не продолжаем
+            return None  # то выходим, дальше не продолжаем
         if order.ref not in self.orders:  # Если заявка не найдена
-            return  # то выходим, дальше не продолжаем
+            return None  # то выходим, дальше не продолжаем
         order_num = order.info['order_num']  # Получаем из заявки номер заявки на бирже
         stop_order = order.exectype in [Order.Stop, Order.StopLimit] and isinstance(self.store.provider.get_order_by_number(order_num)['data'], int)  # Задана стоп заявка и лимитная заявка не выставлена
         transaction = {
